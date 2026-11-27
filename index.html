@@ -1,0 +1,55 @@
+<!DOCTYPE html>
+<html lang="en"><head><meta charset="utf-8">
+<meta http-equiv="Content-Security-Policy" content="default-src 'self' 'unsafe-inline' blob: https://api.deepseek.com https://api.elevenlabs.io; img-src blob:; media-src blob:">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<meta name="referrer" content="no-referrer"><meta name="robots" content="noindex">
+<meta name="apple-mobile-web-app-capable" content="yes"><meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-title" content="My Stories"><meta name="theme-color" content="#15131a">
+<title>My Stories</title>
+<style>
+:root{--bg:#15131a;--card:#221f2a;--ink:#eee9f2;--dim:#a89fb5;--accent:#b79cff;--line:#36313f;--user:#8fd6c4}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--ink);font:16px/1.5 system-ui,sans-serif;overflow-wrap:anywhere}
+#bg{position:fixed;inset:0;z-index:-1;background:center/cover;opacity:.3}
+header{position:sticky;top:0;z-index:2;background:var(--bg);border-bottom:1px solid var(--line);padding:calc(env(safe-area-inset-top)+8px) 12px 8px;display:flex;gap:10px;align-items:center}
+header h1{font-size:18px;margin:0;flex:1}
+main{max-width:760px;margin:auto;padding:12px 12px calc(env(safe-area-inset-bottom)+24px)}
+button,.pick{font:inherit;color:var(--ink);background:var(--card);border:1px solid var(--line);border-radius:12px;padding:10px 14px;cursor:pointer}
+.pick{display:block;text-align:center;background:var(--accent);color:#17121f;font-weight:600;padding:16px;margin:16px 0}
+.pick input{display:none}
+.tabs{display:flex;flex-wrap:wrap;gap:8px;margin-bottom:12px}
+.tabs button.on{border-color:var(--accent);color:var(--accent)}
+input[type=search],input[type=password],input[type=text]{width:100%;font:inherit;padding:10px;border-radius:12px;border:1px solid var(--line);background:var(--card);color:var(--ink);margin-bottom:10px}
+.row{display:flex;gap:12px;align-items:center;width:100%;text-align:left;margin-bottom:8px}
+.row small{display:block;color:var(--dim)}
+.av{width:48px;height:48px;border-radius:50%;object-fit:cover;background:var(--line);flex:none}
+.big{width:100%;max-height:40vh;object-fit:contain}
+.grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(140px,1fr));gap:8px}
+.grid button{padding:6px}.grid img{width:100%;height:90px;object-fit:cover;border-radius:8px;display:block}
+details,.box{background:var(--card);border:1px solid var(--line);border-radius:12px;padding:10px 12px;margin-bottom:8px}
+summary{cursor:pointer;font-weight:600}.txt{white-space:pre-wrap}
+.msg{display:flex;gap:10px;margin-bottom:10px}
+.msg .bubble{flex:1;background:var(--card);border:1px solid var(--line);border-radius:12px;padding:10px 12px;min-width:0}
+.msg b{color:var(--accent)}.msg.me b{color:var(--user)}
+.msg.hidden{opacity:.55}
+em{color:var(--dim)}q{color:#ffd9a0}q:before,q:after{content:""}
+h2{font-size:16px;margin:16px 0 8px}.dim{color:var(--dim)}
+[hidden]{display:none}
+/* chat input bar */
+#chatbar{position:sticky;bottom:0;background:var(--bg);border-top:1px solid var(--line);padding:8px 12px calc(env(safe-area-inset-bottom)+8px);display:flex;gap:8px;align-items:flex-end}
+#chatbar textarea{flex:1;font:inherit;background:var(--card);color:var(--ink);border:1px solid var(--line);border-radius:12px;padding:10px;resize:none;min-height:44px;max-height:120px;overflow-y:auto}
+#chatbar button{flex:none;padding:10px 14px;border-radius:12px}
+#chatbar button.send{background:var(--accent);color:#17121f;font-weight:600;border-color:var(--accent)}
+#chatbar button:disabled{opacity:.4}
+.typing{color:var(--dim);font-style:italic;padding:4px 0}
+.err{color:#ff8080;font-size:14px;margin:4px 0}
+/* settings form */
+.field{margin-bottom:12px}
+.field label{display:block;font-size:13px;color:var(--dim);margin-bottom:4px}
+.btn-row{display:flex;gap:8px;flex-wrap:wrap}
+.btn-row button{flex:1}
+.btn-primary{background:var(--accent);color:#17121f;font-weight:600;border-color:var(--accent)}
+</style>
+</head><body>
+<div id="bg"></div>
+<header><button id="back" hidden>‹ Back</button><h1></h1><b

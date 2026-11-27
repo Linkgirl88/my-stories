@@ -655,6 +655,26 @@ function liveChat(c,importedHistory){
   const RENDER_PAGE=20; // messages rendered at a time
   let history;
 
+  // Long-press to delete a message bubble
+  // histIdx can be a number (fixed index) or a function returning the current index
+  function attachDeletePress(bubble, histIdx){
+    let timer;
+    const start=()=>{timer=setTimeout(()=>{
+      if(!confirm('Delete this message?'))return;
+      const idx=typeof histIdx==='function'?histIdx():histIdx;
+      if(idx<0||idx>=history.length)return;
+      history.splice(idx,1);
+      bubble.remove();
+      scheduleSave();
+    },600);};
+    const cancel=()=>clearTimeout(timer);
+    bubble.addEventListener('pointerdown',start);
+    bubble.addEventListener('pointerup',cancel);
+    bubble.addEventListener('pointercancel',cancel);
+    bubble.addEventListener('pointermove',cancel);
+    bubble.style.cursor='pointer';
+  }
+
   function renderHistory(msgs,offset){
     // Render msgs[offset .. end], with a "Load earlier" button if offset>0
     msgBox.replaceChildren();
@@ -667,16 +687,20 @@ function liveChat(c,importedHistory){
     // Render history messages — lightweight (no swipe) except the last assistant msg
     const slice=msgs.slice(offset);
     slice.forEach((m,i)=>{
+      const histIdx=offset+i; // actual index in history[]
       const isUser=m.role==='user';
       const isLast=!isUser&&(i===slice.length-1||(i===slice.length-2&&slice[slice.length-1].role==='user'));
       if(isUser){
         const bubble=h('div',{class:'msg me'},h('div',{class:'bubble'},h('b',{},'You'),rich(m.content)));
+        attachDeletePress(bubble,histIdx);
         msgBox.append(bubble);
       } else if(isLast){
-        addAssistantMsg(c.name,m.content,[m.content]);
+        const b=addAssistantMsg(c.name,m.content,[m.content]);
+        if(b)attachDeletePress(b.el,histIdx);
       } else {
         // Static bubble for older history — no swipe overhead
         const bubble=h('div',{class:'msg'},img(avUrl),h('div',{class:'bubble'},h('b',{},c.name),rich(m.content)));
+        attachDeletePress(bubble,histIdx);
         msgBox.append(bubble);
       }
     });
@@ -839,6 +863,8 @@ function liveChat(c,importedHistory){
       h('div',{class:'bubble'},h('b',{},name),textDiv,swipeRow)
     );
     msgBox.append(bubble);scrollTo(0,document.body.scrollHeight);
+    // Long-press to delete this message
+    attachDeletePress(bubble,()=>history.findLastIndex(m=>m.role==='assistant'&&m.content===alts[idx]));
     return{alts,get idx(){return idx},el:bubble};
   }
 
@@ -852,6 +878,7 @@ function liveChat(c,importedHistory){
     const bubble=h('div',{class:'msg me'},
       h('div',{class:'bubble'},h('b',{},name),rich(text))
     );
+    attachDeletePress(bubble,()=>history.findLastIndex(m=>m.role==='user'&&m.content===text));
     msgBox.append(bubble);scrollTo(0,document.body.scrollHeight);
   }
   function addErr(msg){msgBox.append(h('p',{class:'err'},'⚠ '+msg));scrollTo(0,document.body.scrollHeight);}

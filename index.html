@@ -147,6 +147,7 @@ async function loadFromDrive(){
     // Restore keys to session
     if(driveData.keys?.ds)sessionStorage.setItem('ds',driveData.keys.ds);
     if(driveData.keys?.el)sessionStorage.setItem('el',driveData.keys.el);
+    if(driveData.keys?.or)sessionStorage.setItem('or',driveData.keys.or);
     return true;
   }catch(e){console.warn('Drive load error',e);return false;}
 }
@@ -154,7 +155,7 @@ async function loadFromDrive(){
 async function saveToDrive(){
   if(!gToken)return;
   // Snapshot current keys
-  driveData.keys={ds:keys.ds,el:keys.el};
+  driveData.keys={ds:keys.ds,el:keys.el,or:keys.or};
   const body=JSON.stringify(driveData);
   try{
     if(driveFileId){
@@ -185,8 +186,10 @@ function loadChatFromDrive(charName){
 const keys={
   get ds(){return sessionStorage.getItem('ds')||''},
   get el(){return sessionStorage.getItem('el')||''},
+  get or(){return sessionStorage.getItem('or')||''},  // OpenRouter
   set ds(v){sessionStorage.setItem('ds',v)},
   set el(v){sessionStorage.setItem('el',v)},
+  set or(v){sessionStorage.setItem('or',v)},
   get ready(){return !!(this.ds&&this.el)}
 };
 
@@ -282,6 +285,18 @@ function voiceLabelFor(charName){
   const v=voiceIdFor(charName);return v?v:'not assigned';
 }
 
+/* ───── Claude via OpenRouter ───── */
+async function askClaude(systemPrompt,userMsg){
+  const r=await fetch('https://openrouter.ai/api/v1/chat/completions',{
+    method:'POST',
+    headers:{'Content-Type':'application/json','Authorization':'Bearer '+keys.or,'HTTP-Referer':'https://linkgirl88.github.io/my-stories','X-Title':'My Stories'},
+    body:JSON.stringify({model:'anthropic/claude-sonnet-4-6',messages:[{role:'system',content:systemPrompt},{role:'user',content:userMsg}],max_tokens:2000,temperature:0.3})
+  });
+  if(!r.ok){const t=await r.text();throw new Error('OpenRouter '+r.status+': '+t.slice(0,200));}
+  const d=await r.json();
+  return d.choices?.[0]?.message?.content||'';
+}
+
 /* ───── DeepSeek chat ───── */
 async function askDeepSeek(systemPrompt,history,userMsg){
   const messages=[{role:'system',content:systemPrompt},...history,{role:'user',content:userMsg}];
@@ -353,11 +368,87 @@ function home(){
     },
     Backgrounds(){
       main.append(h('div',{class:'grid'},bgs.map(b=>h('button',{onclick:()=>go(()=>main.append(img(b,'big')),stem(b))},img(b,''),h('small',{},stem(b))))));
-    }
+    },
+    'Lore Builder'(){loreBuilder();}
   };
   const tabs=h('div',{class:'tabs'},Object.keys(T).map(n=>h('button',{class:n===tab?'on':false,onclick:()=>{tab=n;draw();}},n)));
   main.append(tabs);T[tab]();
   if(problems.length)main.append(h('details',{},h('summary',{},'Files I could not read'),h('div',{class:'txt'},problems.join('\n'))));
+}
+
+/* ───── Lore Builder ───── */
+function loreBuilder(){
+  if(!keys.or){
+    main.append(
+      h('p',{class:'dim'},'Lore Builder uses Claude via OpenRouter to turn your notes and chats into lorebook entries.'),
+      h('p',{class:'err'},'⚠ Add your OpenRouter API key in ⚙ Settings first.')
+    );return;
+  }
+
+  const worldNames=worlds.map(stem);
+  const worldSel=h('select',{style:'width:100%;font:inherit;padding:10px;border-radius:12px;border:1px solid var(--line);background:var(--card);color:var(--ink);margin-bottom:10px'},
+    h('option',{value:''},'(no specific lorebook)'),
+    ...worldNames.map(n=>h('option',{value:n},n))
+  );
+  // Also offer character names
+  const charSel=h('select',{style:'width:100%;font:inherit;padding:10px;border-radius:12px;border:1px solid var(--line);background:var(--card);color:var(--ink);margin-bottom:10px'},
+    h('option',{value:''},'(no specific character)'),
+    ...chars.map(c=>h('option',{value:c.name},c.name))
+  );
+
+  const ta=h('textarea',{placeholder:'Paste your chat log, scene notes, or any raw material here. Claude will pull out facts and create lorebook entries.',style:'width:100%;font:inherit;background:var(--card);color:var(--ink);border:1px solid var(--line);border-radius:12px;padding:10px;min-height:160px;margin-bottom:10px;resize:vertical'});
+  const out=h('div');
+  const btn=h('button',{class:'btn-primary',style:'width:100%;padding:14px;border-radius:12px;font-weight:600;border:none;margin-bottom:10px',onclick:async()=>{
+    const raw=ta.value.trim();if(!raw){out.replaceChildren(h('p',{class:'err'},'Paste some material first.'));return;}
+    btn.disabled=true;btn.textContent='Claude is reading…';out.replaceChildren(h('p',{class:'typing'},'Pulling out lore entries…'));
+    const world=worldSel.value,char=charSel.value;
+    const context=[world&&'Lorebook: '+world,char&&'Main character: '+char].filter(Boolean).join('\n');
+    const sys=`You are a SillyTavern lorebook editor. The user will give you raw material — chat logs, scene notes, brainstorming, whatever — and you will extract discrete facts and write them as lorebook entries.
+
+Output ONLY a JSON array of entry objects. Each entry must have:
+- "comment": short label (the entry name/title)
+- "key": array of 2-5 trigger keywords (lowercase, comma-separated strings)
+- "content": the lorebook entry text. Write in second person if describing a character to an AI ("{{char}} is..."), plain prose for world facts. Be specific and factual. Keep each entry focused on ONE fact or concept.
+- "constant": false (unless it's a core world fact that should always be included)
+
+Do not include entries for things already obvious from a character card. Focus on specific facts, relationships, history, locations, objects, and events that an AI would need to know to write accurately in this world.
+
+${context}`;
+    try{
+      const result=await askClaude(sys,raw);
+      // Extract JSON from the response
+      const match=result.match(/\[[\s\S]*\]/);
+      if(!match)throw new Error('Claude did not return a JSON array. Try again or add more material.');
+      const entries=JSON.parse(match[0]);
+      out.replaceChildren(
+        h('p',{class:'drive-status ok'},'✓ '+entries.length+' entries generated — tap any to copy'),
+        ...entries.map(e=>{
+          const txt=JSON.stringify(e,null,2);
+          const card=h('details',{},
+            h('summary',{},e.comment||'(untitled)',h('small',{class:'dim'},' — keys: '+(e.key||[]).join(', '))),
+            h('div',{class:'txt',style:'font-size:13px;margin:8px 0'},e.content),
+            h('button',{style:'margin-top:6px',onclick:()=>navigator.clipboard.writeText(txt).then(()=>{card.querySelector('button').textContent='Copied!';setTimeout(()=>card.querySelector('button').textContent='Copy JSON',1500);})},'Copy JSON')
+          );
+          return card;
+        }),
+        h('details',{},
+          h('summary',{},'Copy all as JSON array'),
+          h('div',{},
+            h('button',{onclick:()=>navigator.clipboard.writeText(JSON.stringify(entries,null,2))},'Copy all '+entries.length+' entries'),
+            h('pre',{style:'font-size:11px;overflow-x:auto'},JSON.stringify(entries,null,2))
+          )
+        )
+      );
+    }catch(e){out.replaceChildren(h('p',{class:'err'},'⚠ '+e.message));}
+    finally{btn.disabled=false;btn.textContent='Generate lorebook entries';}
+  }},'Generate lorebook entries');
+
+  main.append(
+    h('p',{class:'dim'},'Paste raw material — chats, notes, scenes. Claude pulls out facts and formats them as lorebook entries you can copy into SillyTavern.'),
+    h('div',{class:'field'},h('label',{},'Lorebook (optional context)'),worldSel),
+    h('div',{class:'field'},h('label',{},'Main character (optional context)'),charSel),
+    ta,btn,out
+  );
 }
 
 /* ───── character detail ───── */
@@ -588,21 +679,24 @@ function settingsScreen(){
 
   const dsIn=h('input',{type:'password',placeholder:'sk-…',value:keys.ds?'••••••••':''});
   const elIn=h('input',{type:'password',placeholder:'your ElevenLabs key',value:keys.el?'••••••••':''});
+  const orIn=h('input',{type:'password',placeholder:'sk-or-…',value:keys.or?'••••••••':''});
 
   main.append(
-    h('div',{class:'field'},h('label',{},'DeepSeek API key'),dsIn),
-    h('div',{class:'field'},h('label',{},'ElevenLabs API key'),elIn)
+    h('div',{class:'field'},h('label',{},'DeepSeek API key (chat)'),dsIn),
+    h('div',{class:'field'},h('label',{},'ElevenLabs API key (voice)'),elIn),
+    h('div',{class:'field'},h('label',{},'OpenRouter API key (Lore Builder)'),orIn)
   );
 
   main.append(h('div',{class:'btn-row'},
     h('button',{class:'btn-primary',onclick:async function(){
-      const dv=dsIn.value.trim(),ev=elIn.value.trim();
+      const dv=dsIn.value.trim(),ev=elIn.value.trim(),ov=orIn.value.trim();
       if(dv&&dv!=='••••••••')keys.ds=dv;
       if(ev&&ev!=='••••••••')keys.el=ev;
+      if(ov&&ov!=='••••••••')keys.or=ov;
       if(gToken)await saveToDrive();
       history.back();
     }},'Save'),
-    h('button',{onclick(){keys.ds='';keys.el='';dsIn.value='';elIn.value='';}},'Clear keys')
+    h('button',{onclick(){keys.ds='';keys.el='';keys.or='';dsIn.value='';elIn.value='';orIn.value='';}},'Clear keys')
   ));
 
   main.append(h('h2',{},'Voice map'));

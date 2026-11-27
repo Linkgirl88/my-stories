@@ -35,7 +35,6 @@ summary{cursor:pointer;font-weight:600}.txt{white-space:pre-wrap}
 em{color:var(--dim)}q{color:#ffd9a0}q:before,q:after{content:""}
 h2{font-size:16px;margin:16px 0 8px}.dim{color:var(--dim)}
 [hidden]{display:none}
-/* chat input bar */
 #chatbar{position:sticky;bottom:0;background:var(--bg);border-top:1px solid var(--line);padding:8px 12px calc(env(safe-area-inset-bottom)+8px);display:flex;gap:8px;align-items:flex-end}
 #chatbar textarea{flex:1;font:inherit;background:var(--card);color:var(--ink);border:1px solid var(--line);border-radius:12px;padding:10px;resize:none;min-height:44px;max-height:120px;overflow-y:auto}
 #chatbar button{flex:none;padding:10px 14px;border-radius:12px}
@@ -43,7 +42,6 @@ h2{font-size:16px;margin:16px 0 8px}.dim{color:var(--dim)}
 #chatbar button:disabled{opacity:.4}
 .typing{color:var(--dim);font-style:italic;padding:4px 0}
 .err{color:#ff8080;font-size:14px;margin:4px 0}
-/* settings form */
 .field{margin-bottom:12px}
 .field label{display:block;font-size:13px;color:var(--dim);margin-bottom:4px}
 .btn-row{display:flex;gap:8px;flex-wrap:wrap}
@@ -52,4 +50,502 @@ h2{font-size:16px;margin:16px 0 8px}.dim{color:var(--dim)}
 </style>
 </head><body>
 <div id="bg"></div>
-<header><button id="back" hidden>‹ Back</button><h1></h1><b
+<header><button id="back" hidden>‹ Back</button><h1></h1><button id="settingsBtn" hidden title="Settings">⚙</button></header>
+<main></main>
+<script>
+'use strict';
+const $=s=>document.querySelector(s),main=$('main');
+function h(tag,attrs,...kids){
+const e=document.createElement(tag);
+for(const[k,v]of Object.entries(attrs||{})){
+if(typeof v==='function')e[k]=v;
+else if(v!==false&&v!=null)e.setAttribute(k,v);
+}
+e.append(...kids.flat().filter(k=>k!=null&&k!==false));
+return e;
+}
+const keys={
+get ds(){return sessionStorage.getItem('ds')||''},
+get el(){return sessionStorage.getItem('el')||''},
+set ds(v){sessionStorage.setItem('ds',v)},
+set el(v){sessionStorage.setItem('el',v)},
+get ready(){return !!(this.ds&&this.el)}
+};
+const dec=new TextDecoder();
+async function openZip(file){
+const tailAt=Math.max(0,file.size-65557),tail=new DataView(await file.slice(tailAt).arrayBuffer());
+let p=tail.byteLength-22;while(p>=0&&tail.getUint32(p,true)!==0x06054b50)p--;
+if(p<0)throw new Error('That does not look like a complete zip file.');
+const count=tail.getUint16(p+10,true),size=tail.getUint32(p+12,true),off=tail.getUint32(p+16,true);
+if(count===0xffff||off===0xffffffff)throw new Error('Zip is too large. Use the slim backup.');
+const cd=await file.slice(off,off+size).arrayBuffer(),v=new DataView(cd),files=new Map();let q=0;
+for(let i=0;i<count;i++){
+const method=v.getUint16(q+10,true),csize=v.getUint32(q+20,true),n=v.getUint16(q+28,true),x=v.getUint16(q+30,true),c=v.getUint16(q+32,true),lo=v.getUint32(q+42,true);
+const name=dec.decode(new Uint8Array(cd,q+46,n));q+=46+n+x+c;
+if(!name.endsWith('/')&&!/secrets\.json$/i.test(name))files.set(name,{method,csize,lo});
+}
+async function blob(name,type){
+const e=files.get(name);if(!e)return null;
+const lh=new DataView(await file.slice(e.lo,e.lo+30).arrayBuffer());
+const start=e.lo+30+lh.getUint16(26,true)+lh.getUint16(28,true),raw=file.slice(start,start+e.csize);
+if(e.method===0)return new Blob([raw],{type});
+if(e.method!==8)throw new Error('Unsupported compression in '+name);
+const buf=await new Response(raw.stream().pipeThrough(new DecompressionStream('deflate-raw'))).arrayBuffer();
+return new Blob([buf],{type});
+}
+return{files,blob,text:async n=>{const b=await blob(n);return b?b.text():null}};
+}
+function readCard(buf){
+const v=new DataView(buf),u=new Uint8Array(buf),found={};let p=8;
+while(p+8<=u.length){
+const len=v.getUint32(p),type=String.fromCharCode(...u.subarray(p+4,p+8));
+if(type==='tEXt'){const d=u.subarray(p+8,p+8+len),z=d.indexOf(0),key=dec.decode(d.subarray(0,z)).toLowerCase();if(key==='chara'||key==='ccv3')found[key]=d.subarray(z+1)}
+p+=12+len;
+}
+const d=found.ccv3||found.chara;if(!d)throw new Error('no card data');
+const bin=atob(dec.decode(d)),o=JSON.parse(dec.decode(Uint8Array.from(bin,c=>c.charCodeAt(0))));return o.data||o;
+}
+let Z,root='',S={},chars=[],chats=new Map(),groups=[],personas=[],worlds=[],bgs=[],problems=[];
+const urls=new Map();
+function url(path){
+if(!urls.has(path))urls.set(path,Z.blob(path,/\.png$/i.test(path)?'image/png':/\.gif$/i.test(path)?'image/gif':/\.webp$/i.test(path)?'image/webp':'image/jpeg').then(b=>b?URL.createObjectURL(b):''));
+return urls.get(path);
+}
+const lazy=new IntersectionObserver(es=>es.forEach(async e=>{
+if(!e.isIntersecting)return;lazy.unobserve(e.target);
+const u=await url(e.target.dataset.path);if(u)e.target.src=u;
+}),{rootMargin:'300px'});
+function img(path,cls='av'){
+const i=h('img',{class:cls,alt:''});
+if(path&&Z&&Z.files.has(path)){i.dataset.path=path;lazy.observe(i);}
+return i;
+}
+const under=(dir,ext)=>[...Z.files.keys()].filter(n=>n.startsWith(root+dir+'/')&&n.toLowerCase().endsWith(ext));
+const base=n=>n.slice(n.lastIndexOf('/')+1),stem=n=>base(n).replace(/\.[^.]+$/,'');
+async function json(n){try{return JSON.parse(await Z.text(n))}catch{problems.push(base(n));return null}}
+async function load(file,say){
+urls.forEach(p=>p.then(u=>u&&URL.revokeObjectURL(u)));urls.clear();
+Z=await openZip(file);
+const s=[...Z.files.keys()].filter(n=>n==='settings.json'||n.endsWith('/settings.json')).sort((a,b)=>a.length-b.length)[0];
+if(!s)throw new Error('Could not find SillyTavern settings in this zip.');
+root=s.slice(0,-'settings.json'.length);S=await json(s)||{};
+chars=[];chats=new Map();groups=[];personas=[];worlds=[];problems=[];
+say('Reading characters…');
+for(const p of under('characters','.png')){
+if(p.slice(root.length).split('/').length!==2)continue;
+try{const d=readCard(await(await Z.blob(p)).arrayBuffer());chars.push({path:p,file:base(p),name:d.name||stem(p),d})}
+catch{problems.push(base(p));}
+}
+chars.sort((a,b)=>a.name.localeCompare(b.name));
+for(const p of under('chats','.jsonl')){const k=base(p.slice(0,p.lastIndexOf('/')));if(!chats.has(k))chats.set(k,[]);chats.get(k).push(p);}
+chats.forEach(l=>l.sort().reverse());
+say('Reading groups and lorebooks…');
+for(const p of under('groups','.json')){const g=await json(p);if(g)groups.push(g);}
+const pu=S.power_user||{};
+personas=Object.entries(pu.personas||{}).map(([file,name])=>({file,name,desc:pu.persona_descriptions?.[file]?.description||''})).sort((a,b)=>a.name.localeCompare(b.name));
+worlds=under('worlds','.json').sort();
+bgs=under('backgrounds','').filter(n=>/\.(png|jpe?g|gif|webp)$/i.test(n)).sort();
+}
+function voiceIdFor(charName){
+const map=S.extension_settings?.tts?.ElevenLabs?.voiceMap||{};
+const v=map[charName];
+return(!v||v==='[Default Voice]')?null:v;
+}
+function voiceLabelFor(charName){
+const v=voiceIdFor(charName);return v?v:'not assigned';
+}
+async function askDeepSeek(systemPrompt,history,userMsg){
+const messages=[{role:'system',content:systemPrompt},...history,{role:'user',content:userMsg}];
+const r=await fetch('https://api.deepseek.com/chat/completions',{
+method:'POST',
+headers:{'Content-Type':'application/json','Authorization':'Bearer '+keys.ds},
+body:JSON.stringify({model:'deepseek-chat',messages,max_tokens:800,temperature:0.9})
+});
+if(!r.ok){const t=await r.text();throw new Error('DeepSeek '+r.status+': '+t.slice(0,200));}
+const d=await r.json();
+return d.choices?.[0]?.message?.content||'';
+}
+let currentAudio=null;
+async function speak(text,voiceId){
+if(!voiceId)return;
+if(currentAudio){currentAudio.pause();currentAudio=null;}
+const r=await fetch('https://api.elevenlabs.io/v1/text-to-speech/'+voiceId,{
+method:'POST',
+headers:{'Content-Type':'application/json','xi-api-key':keys.el},
+body:JSON.stringify({text,model_id:'eleven_multilingual_v2',voice_settings:{stability:0.5,similarity_boost:0.75}})
+});
+if(!r.ok){console.warn('ElevenLabs error',r.status);return;}
+const blob=await r.blob();
+const au=new Audio(URL.createObjectURL(blob));
+currentAudio=au;au.play();
+}
+let stack=[];
+function go(fn,title){stack.push({fn,title});history.pushState(stack.length,'');draw();}
+function draw(){
+const s=stack.at(-1);
+const old=$('#chatbar');if(old)old.remove();
+main.replaceChildren();
+$('h1').textContent=s.title;
+$('#bg').style.backgroundImage='';
+$('#back').hidden=stack.length<2;
+$('#settingsBtn').hidden=!Z;
+scrollTo(0,0);s.fn();
+}
+addEventListener('popstate',()=>{if(stack.length>1){stack.pop();draw();}});
+$('#back').onclick=()=>history.back();
+$('#settingsBtn').onclick=()=>go(settingsScreen,'Settings');
+const row=(path,title,sub,fn)=>h('button',{class:'row',onclick:fn},path!==null&&img(path),h('span',{},title,sub&&h('small',{},sub)));
+function searchable(items,make,text){
+const list=h('div'),show=q=>list.replaceChildren(...items.filter(i=>text(i).toLowerCase().includes(q.toLowerCase())).map(make));
+main.append(h('input',{type:'search',placeholder:'Search',oninput:e=>show(e.target.value)}),list);show('');
+}
+let tab='Characters';
+function home(){
+const T={
+Characters(){searchable(chars,c=>row(c.path,c.name,c.file.replace(/\.png$/i,''),()=>go(()=>character(c),c.name)),c=>c.name+c.file);},
+Groups(){groups.forEach(g=>main.append(row(null,g.name,(g.members||[]).map(m=>stem(m)).join(', '),()=>go(()=>group(g),g.name))));},
+Personas(){searchable(personas,p=>h('details',{},h('summary',{},p.name),img(root+'User Avatars/'+p.file,'big'),h('div',{class:'txt'},p.desc||'(no description)')),p=>p.name);},
+Lorebooks(){searchable(worlds,w=>row(null,stem(w),'',()=>go(()=>lore(w),stem(w))),stem);},
+Backgrounds(){main.append(h('div',{class:'grid'},bgs.map(b=>h('button',{onclick:()=>go(()=>main.append(img(b,'big')),stem(b))},img(b,''),h('small',{},stem(b)))))));}
+};
+const tabs=h('div',{class:'tabs'},Object.keys(T).map(n=>h('button',{class:n===tab?'on':false,onclick:()=>{tab=n;draw();}},n)));
+main.append(tabs);T[tab]();
+if(problems.length)main.append(h('details',{},h('summary',{},'Files I could not read'),h('div',{class:'txt'},problems.join('\n'))));
+}
+const sect=(t,v,open)=>v&&h('details',{open:open?'':false},h('summary',{},t),h('div',{class:'txt'},v));function character(c){
+const d=c.d,m=t=>(t||'').replaceAll('{{char}}',c.name).replaceAll('{{user}}','you'),linked=d.extensions?.world;
+const w=linked&&worlds.find(p=>stem(p)===linked);
+const vid=voiceIdFor(c.name);
+const chatBtn=h('button',{class:'btn-primary',style:'width:100%;margin:10px 0;padding:14px;border-radius:12px;font-weight:600;border:none',
+onclick:()=>go(()=>liveChat(c),'Chat with '+c.name)
+},'💬 Chat with '+c.name);
+main.append(img(c.path,'big'),chatBtn,h('p',{class:'dim'},'Voice: '+(vid||'not assigned')),h('h2',{},'Chats'));
+const l=chats.get(stem(c.file))||[];
+if(!l.length)main.append(h('p',{class:'dim'},'No chats for this card.'));
+l.forEach(p=>main.append(row(null,stem(p),'',()=>go(()=>chat(p),c.name))));
+main.append(h('h2',{},'Card'));
+main.append(...[sect('Description',m(d.description)),sect('Personality',m(d.personality)),sect('Scenario',m(d.scenario)),sect('First message',m(d.first_mes)),sect('Example messages',m(d.mes_example)),sect('System prompt',m(d.system_prompt))].filter(Boolean));
+if(w)main.append(row(null,'Linked lorebook: '+linked,'',()=>go(()=>lore(w),linked)));
+if(d.character_book?.entries)main.append(row(null,'Lorebook saved inside the card','',()=>go(()=>entries(d.character_book.entries),c.name)));
+}
+function liveChat(c){
+const d=c.d,vid=voiceIdFor(c.name),history=[];
+const rawSys=(d.system_prompt||'').replaceAll('{{char}}',c.name).replaceAll('{{user}}','the person you are speaking with');
+const sysParts=[rawSys];
+if(d.description)sysParts.push('CHARACTER:\n'+d.description.replaceAll('{{char}}',c.name));
+if(d.personality)sysParts.push('PERSONALITY:\n'+d.personality.replaceAll('{{char}}',c.name));
+if(d.scenario)sysParts.push('SCENARIO:\n'+d.scenario.replaceAll('{{char}}',c.name));
+const systemPrompt=sysParts.filter(Boolean).join('\n\n');
+const avUrl=c.path,msgBox=h('div');
+main.append(img(c.path,'big'),msgBox);
+if(d.first_mes){
+const fmes=d.first_mes.replaceAll('{{char}}',c.name).replaceAll('{{user}}','you');
+addMsg(c.name,fmes,false);history.push({role:'assistant',content:fmes});
+}
+const ta=h('textarea',{placeholder:'Say something…',rows:1,oninput(){this.style.height='auto';this.style.height=this.scrollHeight+'px';}});
+const sendBtn=h('button',{class:'send',onclick:send},'Send');
+const ttsBtn=h('button',{title:vid?'Voice on':'No voice assigned',onclick(){ttsOn=!ttsOn;ttsBtn.textContent=ttsOn?'🔊':'🔇';}},vid?'🔊':'🔇');
+if(!vid)ttsBtn.disabled=true;
+let ttsOn=!!vid;
+document.body.append(h('div',{id:'chatbar'},ta,ttsBtn,sendBtn));
+ta.addEventListener('keydown',e=>{if(e.key==='Enter'&&!e.shiftKey){e.preventDefault();send();}});
+if(!keys.ready){addErr('API keys not set. Tap ⚙ to add them.');sendBtn.disabled=true;}
+async function send(){
+const txt=ta.value.trim();if(!txt||sendBtn.disabled)return;
+ta.value='';ta.style.height='auto';
+addMsg('You',txt,true);history.push({role:'user',content:txt});
+sendBtn.disabled=true;ttsBtn.disabled=true;
+const typing=h('p',{class:'typing'},c.name+' is thinking…');
+msgBox.append(typing);scrollTo(0,document.body.scrollHeight);
+try{
+const reply=await askDeepSeek(systemPrompt,history.slice(0,-1),txt);
+typing.remove();addMsg(c.name,reply,false);history.push({role:'assistant',content:reply});
+if(ttsOn&&vid)speak(stripActions(reply),vid);
+}catch(e){typing.remove();addErr(e.message);}
+finally{sendBtn.disabled=false;if(vid)ttsBtn.disabled=false;}
+}
+function addMsg(name,text,isUser){
+const bubble=h('div',{class:'msg'+(isUser?' me':'')},img(isUser?null:avUrl),h('div',{class:'bubble'},h('b',{},name),rich(text)));
+msgBox.append(bubble);scrollTo(0,document.body.scrollHeight);
+}
+function addErr(msg){msgBox.append(h('p',{class:'err'},'⚠ '+msg));scrollTo(0,document.body.scrollHeight);}
+}
+function stripActions(t){return t.replace(/\*[^*\n]+\*/g,' ').replace(/\s+/g,' ').trim();}
+function rich(t){
+const out=h('div',{class:'txt'});
+for(const part of String(t||'').split(/(\*\*[^*\n]+\*\*|\*[^*\n]+\*|"[^"\n]+"|"[^"\n]+")/)){
+if(!part)continue;
+if(/^\*\*.+\*\*$/.test(part))out.append(h('strong',{},part.slice(2,-2)));
+else if(/^\*.+\*$/.test(part))out.append(h('em',{},part.slice(1,-1)));
+else if(/^[""]/.test(part))out.append(h('q',{},part));
+else out.append(part);
+}
+return out;
+}
+function group(g){
+main.append(h('h2',{},'Members'),...(g.members||[]).map(f=>{
+const c=chars.find(c=>c.file===f);
+return row(root+'characters/'+f,c?c.name:stem(f),c?'Voice: '+voiceLabelFor(c.name):'',c?()=>go(()=>character(c),c.name):null);
+}),h('h2',{},'Chats'));
+(g.chats||[]).forEach(id=>{const p=root+'group chats/'+id+'.jsonl';if(Z.files.has(p))main.append(row(null,id,'',()=>go(()=>chat(p),g.name)));});
+}
+async function lore(p){const w=await json(p);if(w)entries(w.entries);else main.append('Could not read this lorebook.');}
+function entries(e){
+const list=Object.values(e||{});
+searchable(list,x=>{
+const keys=(x.key||x.keys||[]).join(', ');
+return h('details',{},h('summary',{},x.comment||x.name||keys||'(untitled)',(x.disable||x.enabled===false)?' (off)':''),h('p',{class:'dim'},x.constant?'Always included':'Keywords: '+(keys||'none')),h('div',{class:'txt'},x.content||''));
+},x=>(x.comment||'')+(x.key||x.keys||[]).join(' ')+(x.content||''));
+}
+function avatarFor(m,meta){
+const f=m.force_avatar;
+if(f){try{const u=new URL(f,'http://x');const file=u.searchParams.get('file');if(file)return root+(u.searchParams.get('type')==='persona'?'User Avatars/':'characters/')+file;const d=decodeURIComponent(u.pathname.slice(1));if(Z.files.has(root+d))return root+d}catch{}}
+if(m.is_user){const file=meta.persona||personas.find(p=>p.name===m.name)?.file;return file&&root+'User Avatars/'+file;}
+if(m.original_avatar)return root+'characters/'+m.original_avatar;
+return null;
+}
+async function chat(p){
+const screen=stack.at(-1);main.append('Opening chat…');
+const lines=(await Z.text(p)).split('\n').filter(l=>l.trim());let bad=0;
+const all=lines.map(l=>{try{return JSON.parse(l)}catch{bad++;return null}}).filter(Boolean);
+if(stack.at(-1)!==screen)return;
+const meta=all[0]?.chat_metadata||{},msgs=all[0]?.chat_metadata?all.slice(1):all;
+const folder=base(p.slice(0,p.lastIndexOf('/'))),card=root+'characters/'+folder+'.png';
+const bg=/backgrounds\/([^"')]+)/.exec(meta.custom_background||'');
+if(bg){let f=bg[1];try{f=decodeURIComponent(f)}catch{}url(root+'backgrounds/'+f).then(u=>{if(u&&stack.at(-1)===screen)$('#bg').style.backgroundImage=`url("${u}")`});}
+main.replaceChildren();
+const memory=msgs.findLast(m=>m.extra?.memory)?.extra.memory;
+if(memory)main.append(sect('Latest summary',memory));
+if(bad)main.append(h('p',{},'Some lines could not be read.'));
+let from=Math.max(0,msgs.length-40);
+const box=h('div');
+const make=m=>h('div',{class:'msg'+(m.is_user?' me':'')+(m.is_system?' hidden':'')},img(avatarFor(m,meta)||(m.is_user?null:card)),h('div',{class:'bubble'},h('b',{},m.name||''),m.is_system&&h('small',{class:'dim'},' hidden from AI'),rich(m.mes)));
+const more=h('button',{class:'row',onclick:()=>{const next=Math.max(0,from-40);box.prepend(...msgs.slice(next,from).map(make));from=next;more.hidden=!from;}},'Show earlier messages');
+more.hidden=!from;box.append(...msgs.slice(from).map(make));
+main.append(h('button',{onclick:()=>scrollTo(0,document.body.scrollHeight)},'Jump to latest'),h('p'),more,box);
+}
+function settingsScreen(){
+main.append(h('h2',{},'API Keys'),h('p',{class:'dim'},'Keys are kept only while this tab is open. Never saved to disk.'));
+const dsIn=h('input',{type:'password',placeholder:'sk-…',value:keys.ds?'••••••••':''});
+const elIn=h('input',{type:'password',placeholder:'your ElevenLabs key',value:keys.el?'••••••••':''});
+main.append(h('div',{class:'field'},h('label',{},'DeepSeek API key'),dsIn),h('div',{class:'field'},h('label',{},'ElevenLabs API key'),elIn));
+main.append(h('div',{class:'btn-row'},
+h('button',{class:'btn-primary',onclick(){const dv=dsIn.value.trim(),ev=elIn.value.trim();if(dv&&dv!=='••••••••')keys.ds=dv;if(ev&&ev!=='••••••••')keys.el=ev;history.back();}},'Save'),
+h('button',{onclick(){keys.ds='';keys.el='';dsIn.value='';elIn.value='';}},'Clear keys')
+));
+main.append(h('h2',{},'Voice map'),h('p',{class:'dim'},'Voice IDs from your SillyTavern TTS settings.'));
+const vm=S.extension_settings?.tts?.ElevenLabs?.voiceMap||{};
+const assigned=Object.entries(vm).filter(([,v])=>v&&v!=='[Default Voice]');
+if(!assigned.length){main.append(h('p',{class:'dim'},'No voices assigned in this backup.'));return;}
+assigned.forEach(([name,vid])=>main.append(h('div',{class:'box'},h('b',{},name),h('small',{class:'dim'},vid))));
+}
+function start(){
+const status=h('p',{role:'status'});
+const input=h('input',{type:'file',accept:'.zip,application/zip'});
+input.onchange=async()=>{
+const f=input.files[0];if(!f)return;
+status.textContent='Opening your backup…';
+try{
+if(!('DecompressionStream'in self))throw new Error('Please update your browser first.');
+await load(f,t=>status.textContent=t);stack=[];tab='Characters';go(home,'My Stories');
+}catch(e){status.textContent=e.message;}
+input.value='';
+};
+main.append(h('p',{},'Choose your SillyTavern slim backup zip.'),h('label',{class:'pick'},'Choose backup zip',input),status,h('div',{class:'box'},'This page only reads your file. It saves nothing, changes nothing, and sends nothing — until you open a live chat.'));
+}
+stack=[{fn:start,title:'My Stories'}];draw();
+</script>
+</body></html>
+return d.choices?.[0]?.message?.content||'';
+}
+let currentAudio=null;
+async function speak(text,voiceId){
+if(!voiceId)return;
+if(currentAudio){currentAudio.pause();currentAudio=null;}
+const r=await fetch('https://api.elevenlabs.io/v1/text-to-speech/'+voiceId,{
+method:'POST',
+headers:{'Content-Type':'application/json','xi-api-key':keys.el},
+body:JSON.stringify({text,model_id:'eleven_multilingual_v2',voice_settings:{stability:0.5,similarity_boost:0.75}})
+});
+if(!r.ok){console.warn('ElevenLabs error',r.status);return;}
+const blob=await r.blob();
+const au=new Audio(URL.createObjectURL(blob));
+currentAudio=au;au.play();
+}
+let stack=[];
+function go(fn,title){stack.push({fn,title});history.pushState(stack.length,'');draw();}
+function draw(){
+const s=stack.at(-1);
+const old=$('#chatbar');if(old)old.remove();
+main.replaceChildren();
+$('h1').textContent=s.title;
+$('#bg').style.backgroundImage='';
+$('#back').hidden=stack.length<2;
+$('#settingsBtn').hidden=!Z;
+scrollTo(0,0);s.fn();
+}
+addEventListener('popstate',()=>{if(stack.length>1){stack.pop();draw();}});
+$('#back').onclick=()=>history.back();
+$('#settingsBtn').onclick=()=>go(settingsScreen,'Settings');
+const row=(path,title,sub,fn)=>h('button',{class:'row',onclick:fn},path!==null&&img(path),h('span',{},title,sub&&h('small',{},sub)));
+function searchable(items,make,text){
+const list=h('div'),show=q=>list.replaceChildren(...items.filter(i=>text(i).toLowerCase().includes(q.toLowerCase())).map(make));
+main.append(h('input',{type:'search',placeholder:'Search',oninput:e=>show(e.target.value)}),list);show('');
+}
+let tab='Characters';
+function home(){
+const T={
+Characters(){searchable(chars,c=>row(c.path,c.name,c.file.replace(/\.png$/i,''),()=>go(()=>character(c),c.name)),c=>c.name+c.file);},
+Groups(){groups.forEach(g=>main.append(row(null,g.name,(g.members||[]).map(m=>stem(m)).join(', '),()=>go(()=>group(g),g.name))));},
+Personas(){searchable(personas,p=>h('details',{},h('summary',{},p.name),img(root+'User Avatars/'+p.file,'big'),h('div',{class:'txt'},p.desc||'(no description)')),p=>p.name);},
+Lorebooks(){searchable(worlds,w=>row(null,stem(w),'',()=>go(()=>lore(w),stem(w))),stem);},
+Backgrounds(){main.append(h('div',{class:'grid'},bgs.map(b=>h('button',{onclick:()=>go(()=>main.append(img(b,'big')),stem(b))},img(b,''),h('small',{},stem(b)))))));}
+};
+const tabs=h('div',{class:'tabs'},Object.keys(T).map(n=>h('button',{class:n===tab?'on':false,onclick:()=>{tab=n;draw();}},n)));
+main.append(tabs);T[tab]();
+if(problems.length)main.append(h('details',{},h('summary',{},'Files I could not read'),h('div',{class:'txt'},problems.join('\n'))));
+}
+const sect=(t,v,open)=>v&&h('details',{open:open?'':false},h('summary',{},t),h('div',{class:'txt'},v));function character(c){
+const d=c.d,m=t=>(t||'').replaceAll('{{char}}',c.name).replaceAll('{{user}}','you'),linked=d.extensions?.world;
+const w=linked&&worlds.find(p=>stem(p)===linked);
+const vid=voiceIdFor(c.name);
+const chatBtn=h('button',{class:'btn-primary',style:'width:100%;margin:10px 0;padding:14px;border-radius:12px;font-weight:600;border:none',
+onclick:()=>go(()=>liveChat(c),'Chat with '+c.name)
+},'💬 Chat with '+c.name);
+main.append(img(c.path,'big'),chatBtn,h('p',{class:'dim'},'Voice: '+(vid||'not assigned')),h('h2',{},'Chats'));
+const l=chats.get(stem(c.file))||[];
+if(!l.length)main.append(h('p',{class:'dim'},'No chats for this card.'));
+l.forEach(p=>main.append(row(null,stem(p),'',()=>go(()=>chat(p),c.name))));
+main.append(h('h2',{},'Card'));
+main.append(...[sect('Description',m(d.description)),sect('Personality',m(d.personality)),sect('Scenario',m(d.scenario)),sect('First message',m(d.first_mes)),sect('Example messages',m(d.mes_example)),sect('System prompt',m(d.system_prompt))].filter(Boolean));
+if(w)main.append(row(null,'Linked lorebook: '+linked,'',()=>go(()=>lore(w),linked)));
+if(d.character_book?.entries)main.append(row(null,'Lorebook saved inside the card','',()=>go(()=>entries(d.character_book.entries),c.name)));
+}
+function liveChat(c){
+const d=c.d,vid=voiceIdFor(c.name),history=[];
+const rawSys=(d.system_prompt||'').replaceAll('{{char}}',c.name).replaceAll('{{user}}','the person you are speaking with');
+const sysParts=[rawSys];
+if(d.description)sysParts.push('CHARACTER:\n'+d.description.replaceAll('{{char}}',c.name));
+if(d.personality)sysParts.push('PERSONALITY:\n'+d.personality.replaceAll('{{char}}',c.name));
+if(d.scenario)sysParts.push('SCENARIO:\n'+d.scenario.replaceAll('{{char}}',c.name));
+const systemPrompt=sysParts.filter(Boolean).join('\n\n');
+const avUrl=c.path,msgBox=h('div');
+main.append(img(c.path,'big'),msgBox);
+if(d.first_mes){
+const fmes=d.first_mes.replaceAll('{{char}}',c.name).replaceAll('{{user}}','you');
+addMsg(c.name,fmes,false);history.push({role:'assistant',content:fmes});
+}
+const ta=h('textarea',{placeholder:'Say something…',rows:1,oninput(){this.style.height='auto';this.style.height=this.scrollHeight+'px';}});
+const sendBtn=h('button',{class:'send',onclick:send},'Send');
+const ttsBtn=h('button',{title:vid?'Voice on':'No voice assigned',onclick(){ttsOn=!ttsOn;ttsBtn.textContent=ttsOn?'🔊':'🔇';}},vid?'🔊':'🔇');
+if(!vid)ttsBtn.disabled=true;
+let ttsOn=!!vid;
+document.body.append(h('div',{id:'chatbar'},ta,ttsBtn,sendBtn));
+ta.addEventListener('keydown',e=>{if(e.key==='Enter'&&!e.shiftKey){e.preventDefault();send();}});
+if(!keys.ready){addErr('API keys not set. Tap ⚙ to add them.');sendBtn.disabled=true;}
+async function send(){
+const txt=ta.value.trim();if(!txt||sendBtn.disabled)return;
+ta.value='';ta.style.height='auto';
+addMsg('You',txt,true);history.push({role:'user',content:txt});
+sendBtn.disabled=true;ttsBtn.disabled=true;
+const typing=h('p',{class:'typing'},c.name+' is thinking…');
+msgBox.append(typing);scrollTo(0,document.body.scrollHeight);
+try{
+const reply=await askDeepSeek(systemPrompt,history.slice(0,-1),txt);
+typing.remove();addMsg(c.name,reply,false);history.push({role:'assistant',content:reply});
+if(ttsOn&&vid)speak(stripActions(reply),vid);
+}catch(e){typing.remove();addErr(e.message);}
+finally{sendBtn.disabled=false;if(vid)ttsBtn.disabled=false;}
+}
+function addMsg(name,text,isUser){
+const bubble=h('div',{class:'msg'+(isUser?' me':'')},img(isUser?null:avUrl),h('div',{class:'bubble'},h('b',{},name),rich(text)));
+msgBox.append(bubble);scrollTo(0,document.body.scrollHeight);
+}
+function addErr(msg){msgBox.append(h('p',{class:'err'},'⚠ '+msg));scrollTo(0,document.body.scrollHeight);}
+}
+function stripActions(t){return t.replace(/\*[^*\n]+\*/g,' ').replace(/\s+/g,' ').trim();}
+function rich(t){
+const out=h('div',{class:'txt'});
+for(const part of String(t||'').split(/(\*\*[^*\n]+\*\*|\*[^*\n]+\*|"[^"\n]+"|"[^"\n]+")/)){
+if(!part)continue;
+if(/^\*\*.+\*\*$/.test(part))out.append(h('strong',{},part.slice(2,-2)));
+else if(/^\*.+\*$/.test(part))out.append(h('em',{},part.slice(1,-1)));
+else if(/^[""]/.test(part))out.append(h('q',{},part));
+else out.append(part);
+}
+return out;
+}
+function group(g){
+main.append(h('h2',{},'Members'),...(g.members||[]).map(f=>{
+const c=chars.find(c=>c.file===f);
+return row(root+'characters/'+f,c?c.name:stem(f),c?'Voice: '+voiceLabelFor(c.name):'',c?()=>go(()=>character(c),c.name):null);
+}),h('h2',{},'Chats'));
+(g.chats||[]).forEach(id=>{const p=root+'group chats/'+id+'.jsonl';if(Z.files.has(p))main.append(row(null,id,'',()=>go(()=>chat(p),g.name)));});
+}
+async function lore(p){const w=await json(p);if(w)entries(w.entries);else main.append('Could not read this lorebook.');}
+function entries(e){
+const list=Object.values(e||{});
+searchable(list,x=>{
+const keys=(x.key||x.keys||[]).join(', ');
+return h('details',{},h('summary',{},x.comment||x.name||keys||'(untitled)',(x.disable||x.enabled===false)?' (off)':''),h('p',{class:'dim'},x.constant?'Always included':'Keywords: '+(keys||'none')),h('div',{class:'txt'},x.content||''));
+},x=>(x.comment||'')+(x.key||x.keys||[]).join(' ')+(x.content||''));
+}
+function avatarFor(m,meta){
+const f=m.force_avatar;
+if(f){try{const u=new URL(f,'http://x');const file=u.searchParams.get('file');if(file)return root+(u.searchParams.get('type')==='persona'?'User Avatars/':'characters/')+file;const d=decodeURIComponent(u.pathname.slice(1));if(Z.files.has(root+d))return root+d}catch{}}
+if(m.is_user){const file=meta.persona||personas.find(p=>p.name===m.name)?.file;return file&&root+'User Avatars/'+file;}
+if(m.original_avatar)return root+'characters/'+m.original_avatar;
+return null;
+}
+async function chat(p){
+const screen=stack.at(-1);main.append('Opening chat…');
+const lines=(await Z.text(p)).split('\n').filter(l=>l.trim());let bad=0;
+const all=lines.map(l=>{try{return JSON.parse(l)}catch{bad++;return null}}).filter(Boolean);
+if(stack.at(-1)!==screen)return;
+const meta=all[0]?.chat_metadata||{},msgs=all[0]?.chat_metadata?all.slice(1):all;
+const folder=base(p.slice(0,p.lastIndexOf('/'))),card=root+'characters/'+folder+'.png';
+const bg=/backgrounds\/([^"')]+)/.exec(meta.custom_background||'');
+if(bg){let f=bg[1];try{f=decodeURIComponent(f)}catch{}url(root+'backgrounds/'+f).then(u=>{if(u&&stack.at(-1)===screen)$('#bg').style.backgroundImage=`url("${u}")`});}
+main.replaceChildren();
+const memory=msgs.findLast(m=>m.extra?.memory)?.extra.memory;
+if(memory)main.append(sect('Latest summary',memory));
+if(bad)main.append(h('p',{},'Some lines could not be read.'));
+let from=Math.max(0,msgs.length-40);
+const box=h('div');
+const make=m=>h('div',{class:'msg'+(m.is_user?' me':'')+(m.is_system?' hidden':'')},img(avatarFor(m,meta)||(m.is_user?null:card)),h('div',{class:'bubble'},h('b',{},m.name||''),m.is_system&&h('small',{class:'dim'},' hidden from AI'),rich(m.mes)));
+const more=h('button',{class:'row',onclick:()=>{const next=Math.max(0,from-40);box.prepend(...msgs.slice(next,from).map(make));from=next;more.hidden=!from;}},'Show earlier messages');
+more.hidden=!from;box.append(...msgs.slice(from).map(make));
+main.append(h('button',{onclick:()=>scrollTo(0,document.body.scrollHeight)},'Jump to latest'),h('p'),more,box);
+}
+function settingsScreen(){
+main.append(h('h2',{},'API Keys'),h('p',{class:'dim'},'Keys are kept only while this tab is open. Never saved to disk.'));
+const dsIn=h('input',{type:'password',placeholder:'sk-…',value:keys.ds?'••••••••':''});
+const elIn=h('input',{type:'password',placeholder:'your ElevenLabs key',value:keys.el?'••••••••':''});
+main.append(h('div',{class:'field'},h('label',{},'DeepSeek API key'),dsIn),h('div',{class:'field'},h('label',{},'ElevenLabs API key'),elIn));
+main.append(h('div',{class:'btn-row'},
+h('button',{class:'btn-primary',onclick(){const dv=dsIn.value.trim(),ev=elIn.value.trim();if(dv&&dv!=='••••••••')keys.ds=dv;if(ev&&ev!=='••••••••')keys.el=ev;history.back();}},'Save'),
+h('button',{onclick(){keys.ds='';keys.el='';dsIn.value='';elIn.value='';}},'Clear keys')
+));
+main.append(h('h2',{},'Voice map'),h('p',{class:'dim'},'Voice IDs from your SillyTavern TTS settings.'));
+const vm=S.extension_settings?.tts?.ElevenLabs?.voiceMap||{};
+const assigned=Object.entries(vm).filter(([,v])=>v&&v!=='[Default Voice]');
+if(!assigned.length){main.append(h('p',{class:'dim'},'No voices assigned in this backup.'));return;}
+assigned.forEach(([name,vid])=>main.append(h('div',{class:'box'},h('b',{},name),h('small',{class:'dim'},vid))));
+}
+function start(){
+const status=h('p',{role:'status'});
+const input=h('input',{type:'file',accept:'.zip,application/zip'});
+input.onchange=async()=>{
+const f=input.files[0];if(!f)return;
+status.textContent='Opening your backup…';
+try{
+if(!('DecompressionStream'in self))throw new Error('Please update your browser first.');
+await load(f,t=>status.textContent=t);stack=[];tab='Characters';go(home,'My Stories');
+}catch(e){status.textContent=e.message;}
+input.value='';
+};
+main.append(h('p',{},'Choose your SillyTavern slim backup zip.'),h('label',{class:'pick'},'Choose backup zip',input),status,h('div',{class:'box'},'This page only reads your file. It saves nothing, changes nothing, and sends nothing — until you open a live chat.'));
+}
+stack=[{fn:start,title:'My Stories'}];draw();
+</script>
+</body></html>

@@ -664,7 +664,22 @@ function liveChat(c,importedHistory){
       },'⬆ Load earlier messages ('+(offset)+' above)');
       msgBox.append(loadMore);
     }
-    msgs.slice(offset).forEach(m=>{const isUser=m.role==='user';addMsg(isUser?'You':c.name,m.content,isUser,false);});
+    // Render history messages — lightweight (no swipe) except the last assistant msg
+    const slice=msgs.slice(offset);
+    slice.forEach((m,i)=>{
+      const isUser=m.role==='user';
+      const isLast=!isUser&&(i===slice.length-1||(i===slice.length-2&&slice[slice.length-1].role==='user'));
+      if(isUser){
+        const bubble=h('div',{class:'msg me'},h('div',{class:'bubble'},h('b',{},'You'),rich(m.content)));
+        msgBox.append(bubble);
+      } else if(isLast){
+        addAssistantMsg(c.name,m.content,[m.content]);
+      } else {
+        // Static bubble for older history — no swipe overhead
+        const bubble=h('div',{class:'msg'},img(avUrl),h('div',{class:'bubble'},h('b',{},c.name),rich(m.content)));
+        msgBox.append(bubble);
+      }
+    });
     scrollTo(0,document.body.scrollHeight);
   }
 

@@ -652,20 +652,36 @@ function liveChat(c,importedHistory){
   refreshStatusDot();
 
   // Use imported ST history, or load saved history from Drive, or start fresh with first_mes
+  const RENDER_PAGE=20; // messages rendered at a time
   let history;
+
+  function renderHistory(msgs,offset){
+    // Render msgs[offset .. end], with a "Load earlier" button if offset>0
+    msgBox.replaceChildren();
+    if(offset>0){
+      const loadMore=h('button',{style:'display:block;width:100%;margin:8px 0;padding:8px;border-radius:8px;background:var(--card);color:var(--dim);border:1px solid var(--line)',
+        onclick(){renderHistory(msgs,Math.max(0,offset-RENDER_PAGE));}
+      },'⬆ Load earlier messages ('+(offset)+' above)');
+      msgBox.append(loadMore);
+    }
+    msgs.slice(offset).forEach(m=>{const isUser=m.role==='user';addMsg(isUser?'You':c.name,m.content,isUser,false);});
+    scrollTo(0,document.body.scrollHeight);
+  }
+
   if(importedHistory&&importedHistory.length){
     history=importedHistory;
     driveData.chats[c.name]=history;
-    // Extract ST memory summary if present
     saveToDrive();
-    history.forEach(m=>{const isUser=m.role==='user';addMsg(isUser?'You':c.name,m.content,isUser,false);});
+    const offset=Math.max(0,history.length-RENDER_PAGE);
+    renderHistory(history,offset);
     main.append(h('p',{class:'dim drive-status ok'},'↑ Imported '+history.length+' messages from SillyTavern — sending last '+Math.min(history.length,CONTEXT_WINDOW)+' to AI'));
   } else {
     history=loadChatFromDrive(c.name);
   }
 
   if(!importedHistory&&history.length){
-    history.forEach(m=>{const isUser=m.role==='user';addMsg(isUser?'You':c.name,m.content,isUser,false);});
+    const offset=Math.max(0,history.length-RENDER_PAGE);
+    renderHistory(history,offset);
     main.append(h('p',{class:'dim drive-status ok'},'↑ '+history.length+' messages loaded — sending last '+Math.min(history.length,CONTEXT_WINDOW)+' to AI'));
   } else if(!importedHistory&&!history.length&&d.first_mes){
     const fmes=d.first_mes.replaceAll('{{char}}',c.name).replaceAll('{{user}}','you');

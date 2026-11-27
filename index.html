@@ -428,6 +428,12 @@ async function checkApiStatus(){
 
 /* ───── ElevenLabs TTS ───── */
 let currentAudio=null;
+let audioCtx=null;
+function unlockAudio(){
+  // Must be called synchronously inside a user gesture to unlock autoplay
+  if(!audioCtx){audioCtx=new(window.AudioContext||window.webkitAudioContext)();}
+  if(audioCtx.state==='suspended')audioCtx.resume();
+}
 async function speak(text,voiceId){
   if(!voiceId)return;
   if(currentAudio){currentAudio.pause();currentAudio=null;}
@@ -438,8 +444,11 @@ async function speak(text,voiceId){
   });
   if(!r.ok){console.warn('ElevenLabs error',r.status);return;}
   const blob=await r.blob();
-  const au=new Audio(URL.createObjectURL(blob));
-  currentAudio=au;au.play();
+  const url=URL.createObjectURL(blob);
+  const au=new Audio(url);
+  au.onended=()=>URL.revokeObjectURL(url);
+  currentAudio=au;
+  try{await au.play();}catch(e){console.warn('Audio play blocked:',e);}
 }
 
 /* ───── navigation ───── */
@@ -663,6 +672,7 @@ function liveChat(c,importedHistory){
       onclick(e){
         e.stopPropagation();
         if(!vid){btn.textContent='🔇';return;}
+        unlockAudio(); // must be synchronous inside the gesture
         btn.textContent='⏳';
         speak(stripActions(text),vid).then(()=>btn.textContent='🔊').catch(()=>btn.textContent='⚠');
       }
@@ -811,6 +821,7 @@ function liveChat(c,importedHistory){
 
   async function send(){
     const txt=ta.value.trim();if(!txt||sendBtn.disabled)return;
+    unlockAudio(); // unlock before async work so auto-TTS can play
     ta.value='';ta.style.height='auto';
     addMsg('You',txt,true,false);
     history.push({role:'user',content:txt});

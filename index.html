@@ -62,6 +62,8 @@ const GOOG_SCOPE='https://www.googleapis.com/auth/drive.appdata';
 const DRIVE_FILE='my-stories-data.json';
 
 /* ───── helpers ───── */
+// Popup-based OAuth — avoids redirect_uri_mismatch entirely
+// The popup opens accounts.google.com; the token comes back via postMessage
 const $=s=>document.querySelector(s), main=$('main');
 function h(tag,attrs,...kids){
   const e=document.createElement(tag);

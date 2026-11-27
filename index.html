@@ -5,10 +5,35 @@
 <meta name="apple-mobile-web-app-capable" content="yes"><meta name="mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-title" content="My Stories"><meta name="theme-color" content="#15131a">
 <title>My Stories</title>
+<link id="odFont" rel="stylesheet" href="" disabled>
 <style>
-:root{--bg:#15131a;--card:#221f2a;--ink:#eee9f2;--dim:#a89fb5;--accent:#b79cff;--line:#36313f;--user:#8fd6c4}
+/* ── Night (default) ── */
+:root{--bg:#15131a;--card:#221f2a;--ink:#eee9f2;--dim:#a89fb5;--accent:#b79cff;--line:#36313f;--user:#8fd6c4;--em:#eee9f2;--q:#ffd9a0;--font:system-ui,sans-serif;--lh:1.5;--ls:normal}
+
+/* ── Azure - OpenDyslexic ── */
+[data-theme="azure"]{
+  --bg:rgba(20,26,30,1);--card:rgba(22,30,42,0.95);--ink:rgba(255,250,200,1);
+  --dim:rgba(180,170,140,1);--accent:rgba(150,200,255,1);--line:rgba(100,150,200,0.3);
+  --user:rgba(120,170,220,1);--em:rgba(150,200,255,1);--q:rgba(255,250,200,1);
+  --font:'OpenDyslexic',system-ui,sans-serif;--lh:1.8;--ls:0.02em
+}
+/* ── Velvet Dusk ── */
+[data-theme="velvet"]{
+  --bg:rgba(16,10,26,1);--card:rgba(22,14,36,0.98);--ink:rgba(225,215,240,1);
+  --dim:rgba(160,145,185,1);--accent:rgba(190,160,230,1);--line:rgba(80,55,110,0.6);
+  --user:rgba(160,200,210,1);--em:rgba(195,175,230,1);--q:rgba(175,210,200,1);
+  --font:'Georgia','Palatino Linotype',serif;--lh:1.75;--ls:0.01em
+}
+/* ── Latte Paper - OpenDyslexic ── */
+[data-theme="latte"]{
+  --bg:rgba(250,245,235,1);--card:rgba(255,250,245,1);--ink:rgba(50,28,15,1);
+  --dim:rgba(120,75,45,1);--accent:rgba(100,60,35,1);--line:rgba(180,140,100,0.4);
+  --user:rgba(120,75,45,1);--em:rgba(120,75,45,1);--q:rgba(130,85,50,1);
+  --font:'OpenDyslexic',system-ui,sans-serif;--lh:1.9;--ls:0.02em
+}
+
 *{box-sizing:border-box}
-body{margin:0;background:var(--bg);color:var(--ink);font:16px/1.5 system-ui,sans-serif;overflow-wrap:anywhere}
+body{margin:0;background:var(--bg);color:var(--ink);font:16px/var(--lh) var(--font);letter-spacing:var(--ls);overflow-wrap:anywhere}
 #bg{position:fixed;inset:0;z-index:-1;background:center/cover;opacity:.3}
 header{position:sticky;top:0;z-index:2;background:var(--bg);border-bottom:1px solid var(--line);padding:calc(env(safe-area-inset-top)+8px) 12px 8px;display:flex;gap:10px;align-items:center}
 header h1{font-size:18px;margin:0;flex:1}
@@ -31,7 +56,7 @@ summary{cursor:pointer;font-weight:600}.txt{white-space:pre-wrap}
 .msg .bubble{flex:1;background:var(--card);border:1px solid var(--line);border-radius:12px;padding:10px 12px;min-width:0}
 .msg b{color:var(--accent)}.msg.me b{color:var(--user)}
 .msg.hidden{opacity:.55}
-em{color:var(--dim)}q{color:#ffd9a0}q:before,q:after{content:""}
+em{color:var(--em)}q{color:var(--q)}q:before,q:after{content:""}
 h2{font-size:16px;margin:16px 0 8px}.dim{color:var(--dim)}
 [hidden]{display:none}
 #chatbar{position:sticky;bottom:0;background:var(--bg);border-top:1px solid var(--line);padding:8px 12px calc(env(safe-area-inset-bottom)+8px);display:flex;gap:8px;align-items:flex-end}
@@ -56,6 +81,26 @@ h2{font-size:16px;margin:16px 0 8px}.dim{color:var(--dim)}
 <main></main>
 <script>
 'use strict';
+
+/* ───── Theme engine ───── */
+const THEMES=[
+  {id:'night',   label:'🌙 Night',          font:false},
+  {id:'azure',   label:'🌊 Azure (Dyslexic)',font:true},
+  {id:'velvet',  label:'🌸 Velvet Dusk',     font:false},
+  {id:'latte',   label:'☕ Latte Paper (Dyslexic)',font:true},
+];
+const OD_URL='https://fonts.cdnfonts.com/css/opendyslexic';
+
+function applyTheme(id){
+  const t=THEMES.find(t=>t.id===id)||THEMES[0];
+  document.documentElement.dataset.theme=t.id==='night'?'':t.id;
+  const link=document.getElementById('odFont');
+  if(t.font){link.href=OD_URL;link.disabled=false;}
+  else{link.disabled=true;}
+  localStorage.setItem('theme',t.id);
+}
+// Apply saved theme immediately (before first render)
+applyTheme(localStorage.getItem('theme')||'night');
 /* ───── Google OAuth config ───── */
 const GOOG_CLIENT_ID='1048575983251-40ru2sdn6kur5s6d1gb0vk1fs6u7ci5r.apps.googleusercontent.com';
 const GOOG_SCOPE='https://www.googleapis.com/auth/drive.appdata';
@@ -298,16 +343,87 @@ async function askClaude(systemPrompt,userMsg){
 }
 
 /* ───── DeepSeek chat ───── */
-async function askDeepSeek(systemPrompt,history,userMsg){
-  const messages=[{role:'system',content:systemPrompt},...history,{role:'user',content:userMsg}];
-  const r=await fetch('https://api.deepseek.com/chat/completions',{
+// Context window: only send last N messages to API (full history still stored/displayed)
+const CONTEXT_WINDOW=40; // messages (20 exchanges)
+
+// Active model — persisted in sessionStorage so it survives page reloads
+let activeModel=sessionStorage.getItem('activeModel')||'deepseek-chat';
+function setModel(m){activeModel=m;sessionStorage.setItem('activeModel',m);}
+
+const DS_MODELS={
+  'deepseek-chat':     {label:'DeepSeek V3 (fast)',    url:'https://api.deepseek.com/chat/completions',key:()=>keys.ds},
+  'deepseek-reasoner': {label:'DeepSeek R1 (deep)',    url:'https://api.deepseek.com/chat/completions',key:()=>keys.ds},
+};
+
+async function askDeepSeek(systemPrompt,history,userMsg,summary){
+  // Windowed context: last CONTEXT_WINDOW messages
+  const window=history.slice(-CONTEXT_WINDOW);
+  // Build system prompt with optional summary injection
+  let fullSys=systemPrompt;
+  if(summary)fullSys+='\n\n[STORY SO FAR]\n'+summary;
+  const messages=[{role:'system',content:fullSys},...window,{role:'user',content:userMsg}];
+  const model=DS_MODELS[activeModel]||DS_MODELS['deepseek-chat'];
+  const r=await fetch(model.url,{
     method:'POST',
-    headers:{'Content-Type':'application/json','Authorization':'Bearer '+keys.ds},
-    body:JSON.stringify({model:'deepseek-reasoner',messages,max_tokens:800,temperature:0.9})
+    headers:{'Content-Type':'application/json','Authorization':'Bearer '+model.key()},
+    body:JSON.stringify({model:activeModel,messages,max_tokens:800,temperature:0.9})
   });
   if(!r.ok){const t=await r.text();throw new Error('DeepSeek '+r.status+': '+t.slice(0,200));}
   const d=await r.json();
   return d.choices?.[0]?.message?.content||'';
+}
+
+/* ───── Lorebook keyword injection ───── */
+// Returns lorebook entries whose keywords appear in recent messages
+function matchingLoreEntries(entries,recentText){
+  if(!entries)return[];
+  return Object.values(entries).filter(e=>{
+    if(e.disable||e.enabled===false)return false;
+    if(e.constant)return true; // always-on entries
+    const keys=(e.key||e.keys||[]);
+    return keys.some(k=>k&&recentText.toLowerCase().includes(k.toLowerCase()));
+  });
+}
+
+// Build lorebook context string from matched entries
+function buildLoreContext(c,recentHistory){
+  // Check character's linked lorebook and embedded lorebook
+  const linked=c.d.extensions?.world;
+  const loreEntries=[];
+  // Embedded in card
+  if(c.d.character_book?.entries)loreEntries.push(...Object.values(c.d.character_book.entries));
+  // Linked lorebook file
+  if(linked){
+    const lp=worlds.find(p=>stem(p)===linked);
+    if(lp&&Z?.files?.has(lp)){
+      // We'll load it async — for now return what we have from card
+    }
+  }
+  if(!loreEntries.length)return'';
+  // Scan last 10 messages for keywords
+  const recentText=recentHistory.slice(-10).map(m=>m.content).join(' ');
+  const matched=matchingLoreEntries({...loreEntries.map((e,i)=>[i,e]).reduce((o,[i,e])=>(o[i]=e,o),{})},recentText);
+  if(!matched.length)return'';
+  return'\n\n[LOREBOOK]\n'+matched.map(e=>e.content).filter(Boolean).join('\n---\n');
+}
+
+/* ───── API status pinger ───── */
+async function pingApi(name,url,headers){
+  const t0=Date.now();
+  try{
+    const r=await fetch(url,{method:'POST',headers,body:'{}',signal:AbortSignal.timeout(5000)});
+    // 400/422 = endpoint alive, just bad request (expected)
+    const ok=r.status<500;
+    return{ok,ms:Date.now()-t0};
+  }catch(e){return{ok:false,ms:null};}
+}
+async function checkApiStatus(){
+  const[ds,el,or]=await Promise.all([
+    pingApi('ds','https://api.deepseek.com/chat/completions',{'Content-Type':'application/json','Authorization':'Bearer '+keys.ds}),
+    pingApi('el','https://api.elevenlabs.io/v1/voices',{'xi-api-key':keys.el}),
+    pingApi('or','https://openrouter.ai/api/v1/models',{'Authorization':'Bearer '+keys.or}),
+  ]);
+  return{ds,el,or};
 }
 
 /* ───── ElevenLabs TTS ───── */
@@ -355,7 +471,27 @@ let tab='Characters';
 function home(){
   const T={
     Characters(){
-      searchable(chars,c=>row(c.path,c.name,c.file.replace(/\.png$/i,''),()=>go(()=>character(c),c.name)),c=>c.name+c.file);
+      // Duplicate detection — group by name, flag any name with more than one file
+      const byName=new Map();
+      chars.forEach(c=>{(byName.get(c.name)||(byName.set(c.name,[]),byName.get(c.name))).push(c);});
+      const dupes=[...byName.values()].filter(g=>g.length>1);
+      if(dupes.length){
+        const dupeSect=h('details',{style:'margin-bottom:12px;padding:10px;background:var(--warn,#4a3000);border-radius:10px;border:1px solid #a06000'},
+          h('summary',{style:'font-weight:600;cursor:pointer;color:var(--warn-text,#ffd080)'},'⚠️ '+dupes.length+' duplicate character'+(dupes.length>1?'s':'')+' — tap to see'),
+          h('p',{style:'font-size:13px;margin:8px 0 4px;opacity:.8'},'Same name, multiple files. Delete the old ones in SillyTavern to clean up.'),
+          ...dupes.map(g=>h('div',{style:'margin:8px 0;padding:8px;background:rgba(0,0,0,.3);border-radius:8px'},
+            h('b',{},g[0].name),
+            h('div',{style:'font-size:12px;opacity:.75;margin-top:4px'},g.map(c=>h('div',{},c.file)).reduce((a,b)=>[a,' ',b]))
+          ))
+        );
+        main.append(dupeSect);
+      }
+      searchable(chars,c=>{
+        const isDupe=byName.get(c.name).length>1;
+        const r=row(c.path,c.name,c.file.replace(/\.png$/i,''),()=>go(()=>character(c),c.name));
+        if(isDupe)r.style.borderLeft='3px solid #a06000';
+        return r;
+      },c=>c.name+c.file);
     },
     Groups(){
       groups.forEach(g=>main.append(row(null,g.name,(g.members||[]).map(m=>stem(m)).join(', '),()=>go(()=>group(g),g.name))));
@@ -475,44 +611,80 @@ function character(c){
 }
 
 /* ───── LIVE CHAT ───── */
-function liveChat(c){
+function liveChat(c,importedHistory){
   const d=c.d;
   const vid=voiceIdFor(c.name);
 
-  // Build system prompt
+  // Build base system prompt
   const rawSys=(d.system_prompt||'').replaceAll('{{char}}',c.name).replaceAll('{{user}}','the person you are speaking with');
   const sysParts=[rawSys];
   if(d.description)sysParts.push('CHARACTER:\n'+d.description.replaceAll('{{char}}',c.name));
   if(d.personality)sysParts.push('PERSONALITY:\n'+d.personality.replaceAll('{{char}}',c.name));
   if(d.scenario)sysParts.push('SCENARIO:\n'+d.scenario.replaceAll('{{char}}',c.name));
-  const systemPrompt=sysParts.filter(Boolean).join('\n\n');
+  const baseSystemPrompt=sysParts.filter(Boolean).join('\n\n');
 
   const avUrl=c.path;
   const msgBox=h('div');
-  main.append(img(c.path,'big'),msgBox);
 
-  // Load saved history from Drive OR start fresh with first_mes
-  let history=loadChatFromDrive(c.name); // [{role,content}]
+  // Summary storage (from imported ST memory or manually generated)
+  let summary=driveData.summaries?.[c.name]||'';
 
-  if(history.length){
-    // Render saved messages
-    history.forEach(m=>{
-      const isUser=m.role==='user';
-      addMsg(isUser?'You':c.name,m.content,isUser,false);
-    });
-    main.append(h('p',{class:'dim drive-status ok'},'↑ Chat loaded from Drive'));
-  } else if(d.first_mes){
+  // Model selector row
+  const modelSel=h('select',{style:'font:inherit;background:var(--card);color:var(--ink);border:1px solid var(--line);border-radius:8px;padding:4px 8px;font-size:13px',
+    onchange(){ setModel(this.value); }
+  },
+    ...Object.entries(DS_MODELS).map(([k,v])=>h('option',{value:k,...(k===activeModel?{selected:''}:{})},v.label))
+  );
+  const statusDot=h('span',{title:'API status',style:'font-size:18px;cursor:pointer',onclick:refreshStatusDot},'⚪');
+  const contextNote=h('small',{class:'dim',style:'font-size:12px'});
+  const chatHeader=h('div',{style:'display:flex;gap:8px;align-items:center;margin-bottom:8px;flex-wrap:wrap'},
+    modelSel, statusDot, contextNote
+  );
+  main.append(img(c.path,'big'), chatHeader, msgBox);
+
+  // Ping status on load
+  async function refreshStatusDot(){
+    statusDot.textContent='⏳';
+    const s=await checkApiStatus();
+    statusDot.textContent=s.ds.ok?'🟢':'🔴';
+    statusDot.title='DeepSeek '+(s.ds.ok?(s.ds.ms+'ms'):'DOWN')+' · ElevenLabs '+(s.el.ok?'OK':'DOWN')+' · OpenRouter '+(s.or.ok?'OK':'DOWN');
+  }
+  refreshStatusDot();
+
+  // Use imported ST history, or load saved history from Drive, or start fresh with first_mes
+  let history;
+  if(importedHistory&&importedHistory.length){
+    history=importedHistory;
+    driveData.chats[c.name]=history;
+    // Extract ST memory summary if present
+    saveToDrive();
+    history.forEach(m=>{const isUser=m.role==='user';addMsg(isUser?'You':c.name,m.content,isUser,false);});
+    main.append(h('p',{class:'dim drive-status ok'},'↑ Imported '+history.length+' messages from SillyTavern — sending last '+Math.min(history.length,CONTEXT_WINDOW)+' to AI'));
+  } else {
+    history=loadChatFromDrive(c.name);
+  }
+
+  if(!importedHistory&&history.length){
+    history.forEach(m=>{const isUser=m.role==='user';addMsg(isUser?'You':c.name,m.content,isUser,false);});
+    main.append(h('p',{class:'dim drive-status ok'},'↑ '+history.length+' messages loaded — sending last '+Math.min(history.length,CONTEXT_WINDOW)+' to AI'));
+  } else if(!importedHistory&&!history.length&&d.first_mes){
     const fmes=d.first_mes.replaceAll('{{char}}',c.name).replaceAll('{{user}}','you');
     addMsg(c.name,fmes,false,false);
     history=[{role:'assistant',content:fmes}];
   }
 
+  updateContextNote();
+  function updateContextNote(){
+    const sending=Math.min(history.length,CONTEXT_WINDOW);
+    contextNote.textContent=history.length>CONTEXT_WINDOW
+      ?'Sending '+sending+'/'+history.length+' msgs'+(summary?' + summary':'')
+      :'';
+  }
+
   // Chatbar
   const ta=h('textarea',{placeholder:'Say something…',rows:1,oninput(){this.style.height='auto';this.style.height=this.scrollHeight+'px';}});
   const sendBtn=h('button',{class:'send',onclick:send},'Send');
-  const ttsBtn=h('button',{title:vid?'Voice on':'No voice assigned',onclick(){
-    ttsOn=!ttsOn;ttsBtn.textContent=ttsOn?'🔊':'🔇';
-  }},vid?'🔊':'🔇');
+  const ttsBtn=h('button',{title:vid?'Voice on':'No voice assigned',onclick(){ttsOn=!ttsOn;ttsBtn.textContent=ttsOn?'🔊':'🔇';}},vid?'🔊':'🔇');
   if(!vid)ttsBtn.disabled=true;
   let ttsOn=!!vid;
 
@@ -527,22 +699,43 @@ function liveChat(c){
       addMsg(c.name,fmes,false,false);
       history=[{role:'assistant',content:fmes}];
     }
+    updateContextNote();
   }},'🗑');
 
-  const bar=h('div',{id:'chatbar'},ta,ttsBtn,clearBtn,sendBtn);
+  // Summarize older messages button (appears when history > window)
+  const sumBtn=h('button',{title:'Summarize older messages',style:'font-size:13px',onclick:summarizeOlder},'📝');
+
+  const bar=h('div',{id:'chatbar'},ta,ttsBtn,clearBtn,sumBtn,sendBtn);
   document.body.append(bar);
   ta.addEventListener('keydown',e=>{if(e.key==='Enter'&&!e.shiftKey){e.preventDefault();send();}});
 
-  if(!keys.ready){
-    addErr('API keys not set. Tap ⚙ in the top-right corner to add them.');
-    sendBtn.disabled=true;
+  if(!keys.ready){addErr('API keys not set. Tap ⚙ in the top-right corner to add them.');sendBtn.disabled=true;}
+
+  // Summarize everything outside the context window
+  async function summarizeOlder(){
+    if(history.length<=CONTEXT_WINDOW){addErr('Not enough history to summarize yet.');return;}
+    const older=history.slice(0,-CONTEXT_WINDOW);
+    sumBtn.disabled=true;sumBtn.textContent='⏳';
+    try{
+      const prompt='Summarize the following story/roleplay conversation between the user and '+c.name+'. Keep key events, character decisions, and emotional beats. Be concise but thorough:\n\n'+
+        older.map(m=>(m.role==='user'?'User: ':''+c.name+': ')+m.content).join('\n\n');
+      const result=await askDeepSeek('You are a story summarizer. Respond with a concise narrative summary only.',[],prompt);
+      summary=result;
+      if(!driveData.summaries)driveData.summaries={};
+      driveData.summaries[c.name]=summary;
+      await saveToDrive();
+      updateContextNote();
+      main.append(h('div',{class:'box',style:'margin:8px 0'},h('b',{},'📝 Story summary saved'),h('div',{class:'txt',style:'font-size:13px;margin-top:6px'},summary)));
+    }catch(e){addErr('Summary failed: '+e.message);}
+    finally{sumBtn.disabled=false;sumBtn.textContent='📝';}
   }
 
   let saveTimer=null;
-  function scheduleSave(){
-    clearTimeout(saveTimer);
-    saveTimer=setTimeout(()=>saveChatToDrive(c.name,history),2000);
-  }
+  function scheduleSave(){clearTimeout(saveTimer);saveTimer=setTimeout(()=>saveChatToDrive(c.name,history),2000);}
+
+  // ── Swipe to regenerate ──
+  // Each assistant bubble tracks its alternatives: {alts:[...], idx:0, el}
+  let lastAssistantBubble=null;
 
   async function send(){
     const txt=ta.value.trim();if(!txt||sendBtn.disabled)return;
@@ -551,31 +744,84 @@ function liveChat(c){
     history.push({role:'user',content:txt});
     sendBtn.disabled=true;ttsBtn.disabled=true;
     const typing=h('p',{class:'typing'},c.name+' is thinking…');
-    msgBox.append(typing);
-    scrollTo(0,document.body.scrollHeight);
+    msgBox.append(typing);scrollTo(0,document.body.scrollHeight);
     try{
-      const reply=await askDeepSeek(systemPrompt,history.slice(0,-1),txt);
+      // Build system prompt with lore + summary
+      const loreCtx=buildLoreContext(c,history);
+      const systemPrompt=baseSystemPrompt+loreCtx;
+      const reply=await askDeepSeek(systemPrompt,history.slice(0,-1),txt,summary);
       typing.remove();
-      addMsg(c.name,reply,false,true);
+      lastAssistantBubble=addAssistantMsg(c.name,reply,[reply]);
       history.push({role:'assistant',content:reply});
-      scheduleSave();
+      scheduleSave();updateContextNote();
       if(ttsOn&&vid)speak(stripActions(reply),vid);
-    }catch(e){
-      typing.remove();
-      addErr(e.message);
-    }finally{
-      sendBtn.disabled=false;
-      if(vid)ttsBtn.disabled=false;
+    }catch(e){typing.remove();addErr(e.message);}
+    finally{sendBtn.disabled=false;if(vid)ttsBtn.disabled=false;}
+  }
+
+  // Add a swipeable assistant message
+  function addAssistantMsg(name,text,alts){
+    let idx=alts.length-1;
+    const textDiv=h('div',{class:'txt'},rich(text).firstChild||rich(text));
+    const counter=h('small',{class:'dim',style:'font-size:12px'},alts.length>1?(idx+1)+'/'+alts.length:'');
+
+    const prevBtn=h('button',{style:'background:none;border:none;font-size:18px;padding:2px 6px;opacity:.6',
+      onclick:async()=>{
+        if(idx>0){idx--;showAlt();}
+      }
+    },'‹');
+    const nextBtn=h('button',{style:'background:none;border:none;font-size:18px;padding:2px 6px;opacity:.6',
+      onclick:async()=>{
+        if(idx<alts.length-1){idx++;showAlt();}
+        else{await regenerate();}
+      }
+    },'›');
+
+    function showAlt(){
+      textDiv.replaceChildren(rich(alts[idx]));
+      counter.textContent=(idx+1)+'/'+alts.length;
+      // Update the history entry for this message
+      const histIdx=history.findLastIndex(m=>m.role==='assistant');
+      if(histIdx>=0)history[histIdx].content=alts[idx];
+      scheduleSave();
     }
+
+    async function regenerate(){
+      nextBtn.disabled=true;prevBtn.disabled=true;
+      textDiv.textContent=c.name+' is thinking…';
+      try{
+        const loreCtx=buildLoreContext(c,history);
+        const systemPrompt=baseSystemPrompt+loreCtx;
+        // History without the last assistant message
+        const histForRegen=history.slice(0,-1);
+        const lastUser=histForRegen.findLast(m=>m.role==='user');
+        const reply=await askDeepSeek(systemPrompt,histForRegen.slice(0,-1),lastUser?.content||'',summary);
+        alts.push(reply);idx=alts.length-1;showAlt();
+        if(ttsOn&&vid)speak(stripActions(reply),vid);
+      }catch(e){textDiv.textContent='Error: '+e.message;}
+      finally{nextBtn.disabled=false;prevBtn.disabled=false;}
+    }
+
+    const swipeRow=h('div',{style:'display:flex;align-items:center;gap:4px;margin-top:4px'},prevBtn,counter,nextBtn);
+    const bubble=h('div',{class:'msg'},
+      img(avUrl),
+      h('div',{class:'bubble'},h('b',{},name),textDiv,swipeRow)
+    );
+    msgBox.append(bubble);scrollTo(0,document.body.scrollHeight);
+    return{alts,get idx(){return idx},el:bubble};
   }
 
   function addMsg(name,text,isUser,animate){
-    const bubble=h('div',{class:'msg'+(isUser?' me':'')},
-      img(isUser?null:avUrl),
+    if(!isUser){
+      lastAssistantBubble=addAssistantMsg(name,text,[text]);
+      return;
+    }
+    // User message — no swipe needed, also clear swipe from previous assistant msg
+    lastAssistantBubble=null;
+    const bubble=h('div',{class:'msg me'},
       h('div',{class:'bubble'},h('b',{},name),rich(text))
     );
-    msgBox.append(bubble);
-    scrollTo(0,document.body.scrollHeight);
+    msgBox.append(bubble);scrollTo(0,document.body.scrollHeight);
   }
   function addErr(msg){msgBox.append(h('p',{class:'err'},'⚠ '+msg));scrollTo(0,document.body.scrollHeight);}
 
@@ -638,6 +884,25 @@ async function chat(p){
   const bg=/backgrounds\/([^"')]+)/.exec(meta.custom_background||'');
   if(bg){let f=bg[1];try{f=decodeURIComponent(f)}catch{}url(root+'backgrounds/'+f).then(u=>{if(u&&stack.at(-1)===screen)$('#bg').style.backgroundImage=`url("${u}")`});}
   main.replaceChildren();
+
+  // "Continue this chat" — find the matching character and import history
+  const matchChar=chars.find(c=>stem(c.file)===folder);
+  if(matchChar){
+    const continueBtn=h('button',{class:'btn-primary',style:'width:100%;padding:12px;border-radius:12px;font-weight:600;border:none;margin-bottom:12px',
+      onclick:()=>{
+        // Convert ST messages to live chat history format, skip system/hidden messages
+        const importedHistory=msgs
+          .filter(m=>!m.is_system&&m.mes&&m.mes.trim())
+          .map(m=>({role:m.is_user?'user':'assistant',content:m.mes}));
+        // Store in driveData and go to live chat with this history pre-loaded
+        driveData.chats[matchChar.name]=importedHistory;
+        go(()=>liveChat(matchChar,importedHistory),'Chat with '+matchChar.name);
+      }
+    },'▶ Continue this chat with '+matchChar.name);
+    main.append(continueBtn);
+    main.append(h('p',{class:'dim',style:'font-size:13px;margin:0 0 12px'},'Imports the last '+msgs.filter(m=>!m.is_system).length+' messages into a live session. Saves to Drive automatically.'));
+  }
+
   const memory=msgs.findLast(m=>m.extra?.memory)?.extra.memory;
   if(memory)main.append(sect('Latest summary',memory));
   if(bad)main.append(h('p',{},'Some lines could not be read.'));
@@ -654,8 +919,26 @@ async function chat(p){
   main.append(top,h('p'),more,box);
 }
 
+
 /* ───── settings screen ───── */
 function settingsScreen(){
+  // Theme picker
+  main.append(h('h2',{},'Theme'));
+  const currentTheme=localStorage.getItem('theme')||'night';
+  const themeBtns=h('div',{class:'btn-row',style:'flex-wrap:wrap'});
+  THEMES.forEach(t=>{
+    const btn=h('button',{
+      style:'flex:1 1 calc(50% - 4px);'+(t.id===currentTheme?'border-color:var(--accent);color:var(--accent)':''),
+      onclick(){
+        applyTheme(t.id);
+        themeBtns.querySelectorAll('button').forEach(b=>b.style.removeProperty('border-color')&&b.style.removeProperty('color'));
+        btn.style.borderColor='var(--accent)';btn.style.color='var(--accent)';
+      }
+    },t.label);
+    themeBtns.append(btn);
+  });
+  main.append(themeBtns,h('p',{class:'dim',style:'font-size:13px'},'Latte Paper is best for bright environments. Azure and Latte use OpenDyslexic font.'));
+
   // Drive status
   const driveStatus=h('div',{class:'drive-status '+(gToken?'ok':'')},
     gToken?'✓ Connected to Google Drive':'Not connected to Google Drive'
@@ -698,6 +981,29 @@ function settingsScreen(){
     }},'Save'),
     h('button',{onclick(){keys.ds='';keys.el='';keys.or='';dsIn.value='';elIn.value='';orIn.value='';}},'Clear keys')
   ));
+
+  // API status panel
+  main.append(h('h2',{},'API Status'));
+  const dots={ds:h('span',{},'⚪'),el:h('span',{},'⚪'),or:h('span',{},'⚪')};
+  const latencies={ds:h('small',{class:'dim'},''),el:h('small',{class:'dim'},''),or:h('small',{class:'dim'},'')};
+  const statusPanel=h('div',{class:'box',style:'display:grid;grid-template-columns:auto 1fr auto;gap:8px 12px;align-items:center'},
+    h('span',{},'DeepSeek'),dots.ds,latencies.ds,
+    h('span',{},'ElevenLabs'),dots.el,latencies.el,
+    h('span',{},'OpenRouter'),dots.or,latencies.or
+  );
+  const pingBtn=h('button',{onclick:runPing},'Check now');
+  main.append(statusPanel,pingBtn,h('p',{class:'dim',style:'font-size:13px'},'Auto-checks when you open a live chat. Enter API keys above first.'));
+
+  async function runPing(){
+    pingBtn.disabled=true;dots.ds.textContent=dots.el.textContent=dots.or.textContent='⏳';
+    latencies.ds.textContent=latencies.el.textContent=latencies.or.textContent='';
+    const s=await checkApiStatus();
+    dots.ds.textContent=s.ds.ok?'🟢':'🔴'; latencies.ds.textContent=s.ds.ok?(s.ds.ms+'ms'):'unreachable';
+    dots.el.textContent=s.el.ok?'🟢':'🔴'; latencies.el.textContent=s.el.ok?(s.el.ms+'ms'):'unreachable';
+    dots.or.textContent=s.or.ok?'🟢':'🔴'; latencies.or.textContent=s.or.ok?(s.or.ms+'ms'):'unreachable';
+    pingBtn.disabled=false;
+  }
+  if(keys.ready||keys.ds||keys.el||keys.or)runPing();
 
   main.append(h('h2',{},'Voice map'));
   main.append(h('p',{class:'dim'},'From your SillyTavern TTS settings.'));

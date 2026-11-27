@@ -34,7 +34,6 @@ summary{cursor:pointer;font-weight:600}.txt{white-space:pre-wrap}
 em{color:var(--dim)}q{color:#ffd9a0}q:before,q:after{content:""}
 h2{font-size:16px;margin:16px 0 8px}.dim{color:var(--dim)}
 [hidden]{display:none}
-/* chat input bar */
 #chatbar{position:sticky;bottom:0;background:var(--bg);border-top:1px solid var(--line);padding:8px 12px calc(env(safe-area-inset-bottom)+8px);display:flex;gap:8px;align-items:flex-end}
 #chatbar textarea{flex:1;font:inherit;background:var(--card);color:var(--ink);border:1px solid var(--line);border-radius:12px;padding:10px;resize:none;min-height:44px;max-height:120px;overflow-y:auto}
 #chatbar button{flex:none;padding:10px 14px;border-radius:12px}
@@ -42,12 +41,14 @@ h2{font-size:16px;margin:16px 0 8px}.dim{color:var(--dim)}
 #chatbar button:disabled{opacity:.4}
 .typing{color:var(--dim);font-style:italic;padding:4px 0}
 .err{color:#ff8080;font-size:14px;margin:4px 0}
-/* settings form */
 .field{margin-bottom:12px}
 .field label{display:block;font-size:13px;color:var(--dim);margin-bottom:4px}
 .btn-row{display:flex;gap:8px;flex-wrap:wrap}
 .btn-row button{flex:1}
 .btn-primary{background:var(--accent);color:#17121f;font-weight:600;border-color:var(--accent)}
+.drive-status{font-size:13px;color:var(--dim);margin:4px 0}
+.drive-status.ok{color:#8fd6c4}
+.drive-status.err{color:#ff8080}
 </style>
 </head><body>
 <div id="bg"></div>
@@ -55,6 +56,11 @@ h2{font-size:16px;margin:16px 0 8px}.dim{color:var(--dim)}
 <main></main>
 <script>
 'use strict';
+/* ───── Google OAuth config ───── */
+const GOOG_CLIENT_ID='1048575983251-40ru2sdn6kur5s6d1gb0vk1fs6u7ci5r.apps.googleusercontent.com';
+const GOOG_SCOPE='https://www.googleapis.com/auth/drive.appdata';
+const DRIVE_FILE='my-stories-data.json';
+
 /* ───── helpers ───── */
 const $=s=>document.querySelector(s), main=$('main');
 function h(tag,attrs,...kids){
@@ -67,7 +73,102 @@ function h(tag,attrs,...kids){
   return e;
 }
 
-/* ───── secure key store (sessionStorage only — clears when tab closes) ───── */
+/* ───── Google Drive sync ───── */
+let gToken=null; // access token (session only)
+let driveFileId=null;
+let driveData={keys:{},chats:{}}; // persisted data
+
+function googleSignIn(){
+  return new Promise((resolve,reject)=>{
+    const params=new URLSearchParams({
+      client_id:GOOG_CLIENT_ID,
+      redirect_uri:location.origin+location.pathname,
+      response_type:'token',
+      scope:GOOG_SCOPE,
+      prompt:'select_account'
+    });
+    // Store current state
+    sessionStorage.setItem('oauth_pending','1');
+    location.href='https://accounts.google.com/o/oauth2/v2/auth?'+params;
+  });
+}
+
+function handleOAuthReturn(){
+  // Check for token in hash (implicit flow redirect)
+  const hash=new URLSearchParams(location.hash.slice(1));
+  const token=hash.get('access_token');
+  if(token){
+    gToken=token;
+    sessionStorage.setItem('gtoken',token);
+    // Clean URL
+    history.replaceState(null,'',location.pathname);
+    return true;
+  }
+  // Check session storage (token from earlier this session)
+  const stored=sessionStorage.getItem('gtoken');
+  if(stored){gToken=stored;return true;}
+  return false;
+}
+
+async function driveReq(method,path,body,contentType){
+  const headers={Authorization:'Bearer '+gToken};
+  if(contentType)headers['Content-Type']=contentType;
+  const r=await fetch('https://www.googleapis.com/'+path,{method,headers,body});
+  if(r.status===401){gToken=null;sessionStorage.removeItem('gtoken');}
+  return r;
+}
+
+async function loadFromDrive(){
+  if(!gToken)return false;
+  try{
+    // Find the file
+    const r=await driveReq('GET','drive/v3/files?spaces=appDataFolder&fields=files(id,name)&q=name%3D%27'+DRIVE_FILE+'%27');
+    if(!r.ok)return false;
+    const {files}=await r.json();
+    if(!files||!files.length)return false;
+    driveFileId=files[0].id;
+    const r2=await driveReq('GET','drive/v3/files/'+driveFileId+'?alt=media');
+    if(!r2.ok)return false;
+    const data=await r2.json();
+    driveData=Object.assign({keys:{},chats:{}},data);
+    // Restore keys to session
+    if(driveData.keys?.ds)sessionStorage.setItem('ds',driveData.keys.ds);
+    if(driveData.keys?.el)sessionStorage.setItem('el',driveData.keys.el);
+    return true;
+  }catch(e){console.warn('Drive load error',e);return false;}
+}
+
+async function saveToDrive(){
+  if(!gToken)return;
+  // Snapshot current keys
+  driveData.keys={ds:keys.ds,el:keys.el};
+  const body=JSON.stringify(driveData);
+  try{
+    if(driveFileId){
+      await driveReq('PATCH','upload/drive/v3/files/'+driveFileId+'?uploadType=media',body,'application/json');
+    }else{
+      // Create new file in appDataFolder
+      const meta=JSON.stringify({name:DRIVE_FILE,parents:['appDataFolder']});
+      const boundary='boundary_mystories';
+      const multipart=`--${boundary}\r\nContent-Type: application/json\r\n\r\n${meta}\r\n--${boundary}\r\nContent-Type: application/json\r\n\r\n${body}\r\n--${boundary}--`;
+      const r=await driveReq('POST','upload/drive/v3/files?uploadType=multipart',multipart,'multipart/related; boundary='+boundary);
+      if(r.ok){const d=await r.json();driveFileId=d.id;}
+    }
+  }catch(e){console.warn('Drive save error',e);}
+}
+
+// Save a live chat history to Drive
+async function saveChatToDrive(charName,history){
+  if(!gToken)return;
+  driveData.chats[charName]=history;
+  await saveToDrive();
+}
+
+function loadChatFromDrive(charName){
+  return driveData.chats?.[charName]||[];
+}
+
+/* ───── secure key store (sessionStorage — clears when tab closes; also saved to Drive) ───── */
 const keys={
   get ds(){return sessionStorage.getItem('ds')||''},
   get el(){return sessionStorage.getItem('el')||''},
@@ -158,7 +259,7 @@ async function load(file,say){
   bgs=under('backgrounds','').filter(n=>/\.(png|jpe?g|gif|webp)$/i.test(n)).sort();
 }
 
-/* ───── voice map (name → ElevenLabs voice ID) ───── */
+/* ───── voice map ───── */
 function voiceIdFor(charName){
   const map=S.extension_settings?.tts?.ElevenLabs?.voiceMap||{};
   const v=map[charName];
@@ -194,8 +295,7 @@ async function speak(text,voiceId){
   if(!r.ok){console.warn('ElevenLabs error',r.status);return;}
   const blob=await r.blob();
   const au=new Audio(URL.createObjectURL(blob));
-  currentAudio=au;
-  au.play();
+  currentAudio=au;au.play();
 }
 
 /* ───── navigation ───── */
@@ -203,7 +303,6 @@ let stack=[];
 function go(fn,title){stack.push({fn,title});history.pushState(stack.length,'');draw();}
 function draw(){
   const s=stack.at(-1);
-  // remove chatbar if present
   const old=$('#chatbar');if(old)old.remove();
   main.replaceChildren();
   $('h1').textContent=s.title;
@@ -254,13 +353,16 @@ function character(c){
   const d=c.d,m=t=>(t||'').replaceAll('{{char}}',c.name).replaceAll('{{user}}','you'),linked=d.extensions?.world;
   const w=linked&&worlds.find(p=>stem(p)===linked);
   const vid=voiceIdFor(c.name);
-  // Chat button
+  const savedChat=loadChatFromDrive(c.name);
+  const chatLabel=savedChat.length?'💬 Continue chat with '+c.name:'💬 Chat with '+c.name;
   const chatBtn=h('button',{class:'btn-primary',style:'width:100%;margin:10px 0;padding:14px;border-radius:12px;font-weight:600;border:none',
     onclick:()=>go(()=>liveChat(c),'Chat with '+c.name)
-  },'💬 Chat with '+c.name);
-  main.append(img(c.path,'big'),chatBtn,h('p',{class:'dim'},'Voice: '+(vid||'not assigned')),h('h2',{},'Chats'));
+  },chatLabel);
+  main.append(img(c.path,'big'),chatBtn);
+  if(savedChat.length)main.append(h('p',{class:'dim drive-status ok'},'✓ '+Math.floor(savedChat.length/2)+' saved exchanges in Drive'));
+  main.append(h('p',{class:'dim'},'Voice: '+(vid||'not assigned')),h('h2',{},'Chats'));
   const l=chats.get(stem(c.file))||[];
-  if(!l.length)main.append(h('p',{class:'dim'},'No chats for this card.'));
+  if(!l.length)main.append(h('p',{class:'dim'},'No ST chats for this card.'));
   l.forEach(p=>main.append(row(null,stem(p),'',()=>go(()=>chat(p),c.name))));
   main.append(h('h2',{},'Card'));
   main.append(...[sect('Description',m(d.description)),sect('Personality',m(d.personality)),sect('Scenario',m(d.scenario)),sect('First message',m(d.first_mes)),sect('Example messages',m(d.mes_example)),sect('System prompt',m(d.system_prompt))].filter(Boolean));
@@ -272,9 +374,8 @@ function character(c){
 function liveChat(c){
   const d=c.d;
   const vid=voiceIdFor(c.name);
-  const history=[];  // {role,content}
 
-  // build system prompt from card
+  // Build system prompt
   const rawSys=(d.system_prompt||'').replaceAll('{{char}}',c.name).replaceAll('{{user}}','the person you are speaking with');
   const sysParts=[rawSys];
   if(d.description)sysParts.push('CHARACTER:\n'+d.description.replaceAll('{{char}}',c.name));
@@ -282,21 +383,27 @@ function liveChat(c){
   if(d.scenario)sysParts.push('SCENARIO:\n'+d.scenario.replaceAll('{{char}}',c.name));
   const systemPrompt=sysParts.filter(Boolean).join('\n\n');
 
-  // avatar
   const avUrl=c.path;
-
-  // messages container
   const msgBox=h('div');
   main.append(img(c.path,'big'),msgBox);
 
-  // add first message if card has one
-  if(d.first_mes){
+  // Load saved history from Drive OR start fresh with first_mes
+  let history=loadChatFromDrive(c.name); // [{role,content}]
+
+  if(history.length){
+    // Render saved messages
+    history.forEach(m=>{
+      const isUser=m.role==='user';
+      addMsg(isUser?'You':c.name,m.content,isUser,false);
+    });
+    main.append(h('p',{class:'dim drive-status ok'},'↑ Chat loaded from Drive'));
+  } else if(d.first_mes){
     const fmes=d.first_mes.replaceAll('{{char}}',c.name).replaceAll('{{user}}','you');
-    addMsg(c.name,fmes,false);
-    history.push({role:'assistant',content:fmes});
+    addMsg(c.name,fmes,false,false);
+    history=[{role:'assistant',content:fmes}];
   }
 
-  // chatbar
+  // Chatbar
   const ta=h('textarea',{placeholder:'Say something…',rows:1,oninput(){this.style.height='auto';this.style.height=this.scrollHeight+'px';}});
   const sendBtn=h('button',{class:'send',onclick:send},'Send');
   const ttsBtn=h('button',{title:vid?'Voice on':'No voice assigned',onclick(){
@@ -304,7 +411,21 @@ function liveChat(c){
   }},vid?'🔊':'🔇');
   if(!vid)ttsBtn.disabled=true;
   let ttsOn=!!vid;
-  const bar=h('div',{id:'chatbar'},ta,ttsBtn,sendBtn);
+
+  // Clear chat button
+  const clearBtn=h('button',{title:'Clear chat',onclick:async()=>{
+    if(!confirm('Clear saved chat with '+c.name+'? This cannot be undone.'))return;
+    history=[];
+    if(gToken){driveData.chats[c.name]=[];await saveToDrive();}
+    msgBox.replaceChildren();
+    if(d.first_mes){
+      const fmes=d.first_mes.replaceAll('{{char}}',c.name).replaceAll('{{user}}','you');
+      addMsg(c.name,fmes,false,false);
+      history=[{role:'assistant',content:fmes}];
+    }
+  }},'🗑');
+
+  const bar=h('div',{id:'chatbar'},ta,ttsBtn,clearBtn,sendBtn);
   document.body.append(bar);
   ta.addEventListener('keydown',e=>{if(e.key==='Enter'&&!e.shiftKey){e.preventDefault();send();}});
 
@@ -313,10 +434,16 @@ function liveChat(c){
     sendBtn.disabled=true;
   }
 
+  let saveTimer=null;
+  function scheduleSave(){
+    clearTimeout(saveTimer);
+    saveTimer=setTimeout(()=>saveChatToDrive(c.name,history),2000);
+  }
+
   async function send(){
     const txt=ta.value.trim();if(!txt||sendBtn.disabled)return;
     ta.value='';ta.style.height='auto';
-    addMsg('You',txt,true);
+    addMsg('You',txt,true,false);
     history.push({role:'user',content:txt});
     sendBtn.disabled=true;ttsBtn.disabled=true;
     const typing=h('p',{class:'typing'},c.name+' is thinking…');
@@ -325,8 +452,9 @@ function liveChat(c){
     try{
       const reply=await askDeepSeek(systemPrompt,history.slice(0,-1),txt);
       typing.remove();
-      addMsg(c.name,reply,false);
+      addMsg(c.name,reply,false,true);
       history.push({role:'assistant',content:reply});
+      scheduleSave();
       if(ttsOn&&vid)speak(stripActions(reply),vid);
     }catch(e){
       typing.remove();
@@ -337,7 +465,7 @@ function liveChat(c){
     }
   }
 
-  function addMsg(name,text,isUser){
+  function addMsg(name,text,isUser,animate){
     const bubble=h('div',{class:'msg'+(isUser?' me':'')},
       img(isUser?null:avUrl),
       h('div',{class:'bubble'},h('b',{},name),rich(text))
@@ -346,9 +474,11 @@ function liveChat(c){
     scrollTo(0,document.body.scrollHeight);
   }
   function addErr(msg){msgBox.append(h('p',{class:'err'},'⚠ '+msg));scrollTo(0,document.body.scrollHeight);}
+
+  scrollTo(0,document.body.scrollHeight);
 }
 
-/* strip action asterisks for TTS — read only the spoken words */
+/* strip action asterisks for TTS */
 function stripActions(t){return t.replace(/\*[^*\n]+\*/g,' ').replace(/\s+/g,' ').trim();}
 
 /* ───── rich text renderer ───── */
@@ -422,8 +552,16 @@ async function chat(p){
 
 /* ───── settings screen ───── */
 function settingsScreen(){
+  // Drive status
+  const driveStatus=h('div',{class:'drive-status '+(gToken?'ok':'')},
+    gToken?'✓ Connected to Google Drive':'Not connected to Google Drive'
+  );
+  const driveBtn=h('button',{onclick:googleSignIn},gToken?'Switch Google account':'Connect Google Drive');
+  main.append(h('h2',{},'Google Drive'),driveStatus,driveBtn,
+    h('p',{class:'dim'},'Drive saves your chats and API keys so they persist between visits.'));
+
   main.append(h('h2',{},'API Keys'));
-  main.append(h('p',{class:'dim'},'Keys are kept only while this tab is open. They are never saved to disk or sent anywhere except the APIs below.'));
+  main.append(h('p',{class:'dim'},'Saved to Drive when connected. Otherwise kept only while this tab is open.'));
 
   const dsIn=h('input',{type:'password',placeholder:'sk-…',value:keys.ds?'••••••••':''});
   const elIn=h('input',{type:'password',placeholder:'your ElevenLabs key',value:keys.el?'••••••••':''});
@@ -434,17 +572,18 @@ function settingsScreen(){
   );
 
   main.append(h('div',{class:'btn-row'},
-    h('button',{class:'btn-primary',onclick(){
+    h('button',{class:'btn-primary',onclick:async function(){
       const dv=dsIn.value.trim(),ev=elIn.value.trim();
       if(dv&&dv!=='••••••••')keys.ds=dv;
       if(ev&&ev!=='••••••••')keys.el=ev;
+      if(gToken)await saveToDrive();
       history.back();
     }},'Save'),
     h('button',{onclick(){keys.ds='';keys.el='';dsIn.value='';elIn.value='';}},'Clear keys')
   ));
 
   main.append(h('h2',{},'Voice map'));
-  main.append(h('p',{class:'dim'},'These come from your SillyTavern TTS settings. Voice IDs are what ElevenLabs uses internally.'));
+  main.append(h('p',{class:'dim'},'From your SillyTavern TTS settings.'));
   const vm=S.extension_settings?.tts?.ElevenLabs?.voiceMap||{};
   const assigned=Object.entries(vm).filter(([,v])=>v&&v!=='[Default Voice]');
   if(!assigned.length){main.append(h('p',{class:'dim'},'No voices assigned in this backup.'));return;}
@@ -456,6 +595,9 @@ function settingsScreen(){
 /* ───── start screen ───── */
 function start(){
   const status=h('p',{role:'status'});
+  const driveInfo=h('p',{class:'drive-status '+(gToken?'ok':'dim')},
+    gToken?'✓ Google Drive connected — chats will be saved automatically':'Connect Drive in ⚙ Settings to save chats between visits.'
+  );
   const input=h('input',{type:'file',accept:'.zip,application/zip'});
   input.onchange=async()=>{
     const f=input.files[0];if(!f)return;
@@ -471,11 +613,24 @@ function start(){
   main.append(
     h('p',{},'Choose your SillyTavern slim backup zip.'),
     h('label',{class:'pick'},'Choose backup zip',input),
+    driveInfo,
     status,
-    h('div',{class:'box'},'This page only reads your file. It saves nothing, changes nothing, and sends nothing — until you open a live chat.')
+    h('div',{class:'box'},'This page only reads your zip. It saves nothing, changes nothing, and sends nothing — until you open a live chat.')
   );
 }
 
-stack=[{fn:start,title:'My Stories'}];draw();
+/* ───── init ───── */
+async function init(){
+  // Handle OAuth redirect with token in URL hash
+  handleOAuthReturn();
+  // Try to load Drive data if signed in
+  if(gToken){
+    await loadFromDrive();
+  }
+  stack=[{fn:start,title:'My Stories'}];
+  draw();
+}
+
+init();
 </script>
 </body></html>

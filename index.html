@@ -1109,6 +1109,8 @@ function settingsScreen(){
 }
 
 /* ───── start screen ───── */
+const APP_VERSION='2026-11-27a';
+
 function start(){
   const status=h('p',{role:'status'});
   const driveInfo=h('p',{class:'drive-status '+(gToken?'ok':'dim')},
@@ -1131,7 +1133,8 @@ function start(){
     h('label',{class:'pick'},'Choose backup zip',input),
     driveInfo,
     status,
-    h('div',{class:'box'},'This page only reads your zip. It saves nothing, changes nothing, and sends nothing — until you open a live chat.')
+    h('div',{class:'box'},'This page only reads your zip. It saves nothing, changes nothing, and sends nothing — until you open a live chat.'),
+    h('p',{style:'text-align:center;font-size:12px;color:var(--dim);margin-top:16px'},'v'+APP_VERSION)
   );
 }
 

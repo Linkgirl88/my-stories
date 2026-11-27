@@ -82,30 +82,41 @@ let driveData={keys:{},chats:{}}; // persisted data
 
 function googleSignIn(){
   return new Promise((resolve,reject)=>{
+    // Use a popup so there's no redirect — avoids redirect_uri_mismatch
+    // The redirect_uri must still be registered but just points back to our page
+    // Normalize: strip trailing slash to match what's registered in Cloud Console
+    const redirectUri=(location.origin+location.pathname).replace(/\/+$/,'');
     const params=new URLSearchParams({
       client_id:GOOG_CLIENT_ID,
-      redirect_uri:location.origin+location.pathname,
+      redirect_uri:redirectUri,
       response_type:'token',
       scope:GOOG_SCOPE,
       prompt:'select_account'
     });
-    // Store current state
-    sessionStorage.setItem('oauth_pending','1');
-    location.href='https://accounts.google.com/o/oauth2/v2/auth?'+params;
+    const url='https://accounts.google.com/o/oauth2/v2/auth?'+params;
+    const w=800,hh=600,left=(screen.width-w)/2,top=(screen.height-hh)/2;
+    const popup=window.open(url,'gauth','width='+w+',height='+hh+',left='+left+',top='+top);
+    if(!popup){reject(new Error('Popup blocked — please allow popups for this site'));return;}
+
+    // Poll the popup URL until it redirects back with the token
+    const timer=setInterval(()=>{
+      try{
+        // Once the popup navigates to our origin, we can read its URL
+        if(popup.closed){clearInterval(timer);reject(new Error('Sign-in cancelled'));return;}
+        const ph=popup.location.hash;
+        if(ph&&ph.includes('access_token')){
+          clearInterval(timer);
+          popup.close();
+          const tok=new URLSearchParams(ph.slice(1)).get('access_token');
+          if(tok){gToken=tok;sessionStorage.setItem('gtoken',tok);resolve(tok);}
+          else reject(new Error('No token returned'));
+        }
+      }catch(e){/* cross-origin — popup still on Google, keep waiting */}
+    },300);
   });
 }
 
 function handleOAuthReturn(){
-  // Check for token in hash (implicit flow redirect)
-  const hash=new URLSearchParams(location.hash.slice(1));
-  const token=hash.get('access_token');
-  if(token){
-    gToken=token;
-    sessionStorage.setItem('gtoken',token);
-    // Clean URL
-    history.replaceState(null,'',location.pathname);
-    return true;
-  }
   // Check session storage (token from earlier this session)
   const stored=sessionStorage.getItem('gtoken');
   if(stored){gToken=stored;return true;}
@@ -558,7 +569,17 @@ function settingsScreen(){
   const driveStatus=h('div',{class:'drive-status '+(gToken?'ok':'')},
     gToken?'✓ Connected to Google Drive':'Not connected to Google Drive'
   );
-  const driveBtn=h('button',{onclick:googleSignIn},gToken?'Switch Google account':'Connect Google Drive');
+  const driveBtn=h('button',{onclick:async()=>{
+    driveBtn.disabled=true;driveBtn.textContent='Opening Google sign-in…';
+    try{
+      await googleSignIn();
+      await loadFromDrive();
+      draw(); // refresh settings screen to show new status
+    }catch(e){
+      driveBtn.disabled=false;driveBtn.textContent=gToken?'Switch Google account':'Connect Google Drive';
+      main.append(h('p',{class:'err'},'⚠ '+e.message));
+    }
+  }},gToken?'Switch Google account':'Connect Google Drive');
   main.append(h('h2',{},'Google Drive'),driveStatus,driveBtn,
     h('p',{class:'dim'},'Drive saves your chats and API keys so they persist between visits.'));
 
@@ -623,12 +644,10 @@ function start(){
 
 /* ───── init ───── */
 async function init(){
-  // Handle OAuth redirect with token in URL hash
+  // Restore token from this session if still active
   handleOAuthReturn();
   // Try to load Drive data if signed in
-  if(gToken){
-    await loadFromDrive();
-  }
+  if(gToken) await loadFromDrive();
   stack=[{fn:start,title:'My Stories'}];
   draw();
 }

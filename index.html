@@ -35,8 +35,13 @@
 *{box-sizing:border-box}
 body{margin:0;background:var(--bg);color:var(--ink);font:16px/var(--lh) var(--font);letter-spacing:var(--ls);overflow-wrap:anywhere}
 #bg{position:fixed;inset:0;z-index:-1;background:center/cover;opacity:.3}
-header{position:sticky;top:0;z-index:2;background:var(--bg);border-bottom:1px solid var(--line);padding:calc(env(safe-area-inset-top)+8px) 12px 8px;display:flex;gap:10px;align-items:center}
+header{position:sticky;top:0;z-index:2;background:var(--bg);border-bottom:1px solid var(--line);padding:calc(env(safe-area-inset-top)+6px) 8px 0;display:flex;flex-direction:column;gap:0}
+header .hrow{display:flex;gap:8px;align-items:center;padding-bottom:6px}
 header h1{font-size:18px;margin:0;flex:1}
+#tabbar{display:flex;gap:4px;overflow-x:auto;scrollbar-width:none;padding-bottom:6px;border-top:1px solid var(--line);padding-top:6px}
+#tabbar::-webkit-scrollbar{display:none}
+#tabbar button{flex:none;background:none;border:none;border-bottom:2px solid transparent;border-radius:0;padding:4px 8px;font-size:13px;color:var(--dim);white-space:nowrap}
+#tabbar button.on{color:var(--accent);border-bottom-color:var(--accent)}
 main{max-width:760px;margin:auto;padding:12px 12px calc(env(safe-area-inset-bottom)+24px)}
 button,.pick{font:inherit;color:var(--ink);background:var(--card);border:1px solid var(--line);border-radius:12px;padding:10px 14px;cursor:pointer}
 .pick{display:block;text-align:center;background:var(--accent);color:#17121f;font-weight:600;padding:16px;margin:16px 0}
@@ -77,7 +82,7 @@ h2{font-size:16px;margin:16px 0 8px}.dim{color:var(--dim)}
 </style>
 </head><body>
 <div id="bg"></div>
-<header><button id="back" hidden>‹ Back</button><h1></h1><button id="settingsBtn" hidden title="Settings">⚙</button></header>
+<header><div class="hrow"><button id="back" hidden>‹ Back</button><h1></h1><button id="settingsBtn" hidden title="Settings">⚙</button></div><div id="tabbar" hidden></div></header>
 <main></main>
 <script>
 'use strict';
@@ -496,6 +501,7 @@ function draw(){
   $('#bg').style.backgroundImage='';
   $('#back').hidden=stack.length<2;
   $('#settingsBtn').hidden=!Z;
+  $('#tabbar').hidden=true; // home() will un-hide if needed
   scrollTo(0,0);
   s.fn();
 }
@@ -550,8 +556,12 @@ function home(){
     },
     'Lore Builder'(){loreBuilder();}
   };
-  const tabs=h('div',{class:'tabs'},Object.keys(T).map(n=>h('button',{class:n===tab?'on':false,onclick:()=>{tab=n;draw();}},n)));
-  main.append(tabs);T[tab]();
+  // Render tabs into the header tabbar
+  const TAB_ICONS={'Characters':'👥','Groups':'👫','Personas':'🎭','Lorebooks':'📖','Backgrounds':'🖼','Lore Builder':'✨'};
+  const tabbar=document.getElementById('tabbar');
+  tabbar.hidden=false;
+  tabbar.replaceChildren(...Object.keys(T).map(n=>h('button',{class:n===tab?'on':false,onclick:()=>{tab=n;draw();}},TAB_ICONS[n]||'',' '+n)));
+  T[tab]();
   if(problems.length)main.append(h('details',{},h('summary',{},'Files I could not read'),h('div',{class:'txt'},problems.join('\n'))));
 }
 
@@ -952,7 +962,7 @@ function liveChat(c,importedHistory){
 }
 
 /* strip action asterisks for TTS */
-function stripActions(t){return t.replace(/\*[^*\n]+\*/g,' ').replace(/\s+/g,' ').trim();}
+function stripActions(t){return t.replace(/\*/g,'').replace(/\s+/g,' ').trim();}
 
 /* ───── rich text renderer ───── */
 function rich(t){
@@ -1204,7 +1214,7 @@ function settingsScreen(){
 }
 
 /* ───── start screen ───── */
-const APP_VERSION='2026-11-27d';
+const APP_VERSION='2026-11-27e';
 
 function start(){
   const status=h('p',{role:'status'});

@@ -79,6 +79,10 @@ h2{font-size:16px;margin:16px 0 8px}.dim{color:var(--dim)}
 .drive-status{font-size:13px;color:var(--dim);margin:4px 0}
 .drive-status.ok{color:#8fd6c4}
 .drive-status.err{color:#ff8080}
+#ttsBar{position:fixed;bottom:calc(env(safe-area-inset-bottom)+72px);left:50%;transform:translateX(-50%);z-index:10;display:flex;align-items:center;gap:8px;background:var(--card);border:1px solid var(--line);border-radius:20px;padding:6px 12px;box-shadow:0 4px 16px #0006;white-space:nowrap}
+#ttsBar button{background:none;border:none;font-size:18px;padding:2px 4px;cursor:pointer;color:var(--ink)}
+#ttsBar span{font-size:12px;color:var(--dim);min-width:3.2em;text-align:center}
+#ttsBar input[type=range]{width:100px;accent-color:var(--accent)}
 </style>
 </head><body>
 <div id="bg"></div>
@@ -128,7 +132,7 @@ function h(tag,attrs,...kids){
 /* ───── Google Drive sync ───── */
 let gToken=null; // access token (session only)
 let driveFileId=null;
-let driveData={keys:{},chats:{}}; // persisted data
+let driveData={keys:{},chats:{},ttsSpeed:1.35}; // persisted data
 
 function googleSignIn(){
   return new Promise((resolve,reject)=>{
@@ -464,9 +468,54 @@ function unlockAudio(){
   if(!audioCtx){audioCtx=new(window.AudioContext||window.webkitAudioContext)();}
   if(audioCtx.state==='suspended')audioCtx.resume();
 }
+
+/* Floating TTS control bar */
+function getTtsBar(){
+  let bar=document.getElementById('ttsBar');
+  if(!bar){
+    bar=document.createElement('div');
+    bar.id='ttsBar';
+    bar.hidden=true;
+    // Pause/resume toggle
+    const pauseBtn=document.createElement('button');
+    pauseBtn.id='ttsPause';pauseBtn.textContent='⏸';
+    pauseBtn.onclick=()=>{
+      if(!audioCtx)return;
+      if(audioCtx.state==='running'){audioCtx.suspend();pauseBtn.textContent='▶';}
+      else{audioCtx.resume();pauseBtn.textContent='⏸';}
+    };
+    // Stop button
+    const stopBtn=document.createElement('button');
+    stopBtn.textContent='⏹';
+    stopBtn.onclick=()=>{
+      if(currentAudio){currentAudio.pause();currentAudio=null;}
+      bar.hidden=true;
+    };
+    // Speed label + slider
+    const speedLbl=document.createElement('span');
+    speedLbl.id='ttsSpeedLbl';speedLbl.textContent=(driveData.ttsSpeed||1.35).toFixed(2)+'×';
+    const slider=document.createElement('input');
+    slider.type='range';slider.min='0.5';slider.max='2.5';slider.step='0.05';
+    slider.value=driveData.ttsSpeed||1.35;
+    slider.oninput=()=>{
+      driveData.ttsSpeed=parseFloat(slider.value);
+      speedLbl.textContent=driveData.ttsSpeed.toFixed(2)+'×';
+      // Apply to current playback immediately
+      if(currentAudio&&currentAudio.src)currentAudio.src.playbackRate.value=driveData.ttsSpeed;
+      saveToDrive().catch(()=>{});
+    };
+    bar.append(pauseBtn,stopBtn,speedLbl,slider);
+    document.body.append(bar);
+  }
+  return bar;
+}
+
 async function speak(text,voiceId){
   if(!voiceId)return;
   if(currentAudio){currentAudio.pause();currentAudio=null;}
+  // Reset pause button in case context was left suspended
+  const pauseBtn=document.getElementById('ttsPause');
+  if(pauseBtn)pauseBtn.textContent='⏸';
   let r;
   try{
     r=await fetch('https://api.elevenlabs.io/v1/text-to-speech/'+voiceId,{
@@ -483,11 +532,24 @@ async function speak(text,voiceId){
   const decoded=await audioCtx.decodeAudioData(arrayBuf);
   const src=audioCtx.createBufferSource();
   src.buffer=decoded;
+  src.playbackRate.value=driveData.ttsSpeed||1.35;
   src.connect(audioCtx.destination);
   src.start(0);
-  currentAudio={pause(){src.stop();}};
+  currentAudio={src,pause(){try{src.stop();}catch(e){}}};
+  // Show TTS bar
+  const bar=getTtsBar();
+  bar.hidden=false;
+  // Sync speed slider to current setting
+  const slider=bar.querySelector('input[type=range]');
+  const lbl=document.getElementById('ttsSpeedLbl');
+  if(slider){slider.value=driveData.ttsSpeed||1.35;}
+  if(lbl){lbl.textContent=(driveData.ttsSpeed||1.35).toFixed(2)+'×';}
   await new Promise(res=>{src.onended=res;});
   currentAudio=null;
+  bar.hidden=true;
+  if(pauseBtn)pauseBtn.textContent='⏸';
+  // Resume context if it was suspended (so next play works)
+  if(audioCtx&&audioCtx.state==='suspended')audioCtx.resume();
 }
 
 /* ───── navigation ───── */
@@ -1139,6 +1201,35 @@ function settingsScreen(){
   if(keys.ready||keys.ds||keys.el||keys.or)runPing();
 
   main.append(h('h2',{},'Voices'));
+
+  // TTS Speed slider
+  const speedVal=h('span',{style:'font-size:14px;color:var(--accent);min-width:3em;display:inline-block'},(driveData.ttsSpeed||1.35).toFixed(2)+'×');
+  const speedSlider=h('input',{type:'range',min:'0.5',max:'2.5',step:'0.05',value:driveData.ttsSpeed||1.35,
+    style:'flex:1;accent-color:var(--accent)',
+    oninput(){
+      driveData.ttsSpeed=parseFloat(this.value);
+      speedVal.textContent=driveData.ttsSpeed.toFixed(2)+'×';
+      // Sync the floating bar slider if visible
+      const fslider=document.querySelector('#ttsBar input[type=range]');
+      const flbl=document.getElementById('ttsSpeedLbl');
+      if(fslider)fslider.value=driveData.ttsSpeed;
+      if(flbl)flbl.textContent=speedVal.textContent;
+      // Apply to current playback
+      if(currentAudio&&currentAudio.src)currentAudio.src.playbackRate.value=driveData.ttsSpeed;
+      saveToDrive().catch(()=>{});
+    }
+  });
+  main.append(
+    h('div',{style:'margin-bottom:12px'},
+      h('div',{style:'display:flex;align-items:center;gap:10px'},
+        h('label',{style:'font-size:13px;color:var(--dim);white-space:nowrap'},'🔊 Voice speed'),
+        speedSlider,
+        speedVal
+      ),
+      h('p',{class:'dim',style:'font-size:12px;margin:4px 0 0'},'ST default is ~1.35×. Slide to taste.')
+    )
+  );
+
   const voiceStatus=h('p',{class:'dim',style:'font-size:13px'});
   const syncBtn=h('button',{onclick:syncVoices},'🔄 Sync voices from ElevenLabs');
   main.append(h('p',{class:'dim',style:'font-size:13px'},'Matches your SillyTavern voice labels to real ElevenLabs voice IDs automatically.'),syncBtn,voiceStatus);
@@ -1214,7 +1305,7 @@ function settingsScreen(){
 }
 
 /* ───── start screen ───── */
-const APP_VERSION='2026-11-27e';
+const APP_VERSION='2026-11-28a';
 
 function start(){
   const status=h('p',{role:'status'});
